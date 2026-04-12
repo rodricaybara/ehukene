@@ -101,9 +101,9 @@ CREATE INDEX IF NOT EXISTS idx_boot_device_time
     ON boot_metrics (device_id, recorded_at DESC);
 
 -- =============================================================================
--- disk_usage
+-- disk_metrics
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS disk_usage (
+CREATE TABLE IF NOT EXISTS disk_metrics (
     id                  BIGSERIAL       PRIMARY KEY,
     device_id           UUID            NOT NULL REFERENCES devices(id),
     recorded_at         TIMESTAMP       NOT NULL,
@@ -118,10 +118,10 @@ CREATE TABLE IF NOT EXISTS disk_usage (
     used_percent        NUMERIC(5, 2)   NOT NULL CHECK (used_percent BETWEEN 0 AND 100)
 );
 
-CREATE INDEX IF NOT EXISTS idx_disk_usage_device_time
-    ON disk_usage (device_id, recorded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_disk_usage_device_drive_time
-    ON disk_usage (device_id, drive_letter, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_disk_device_time
+    ON disk_metrics (device_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_disk_device_drive
+    ON disk_metrics (device_id, drive_letter, recorded_at DESC);
 
 -- =============================================================================
 -- agent_versions  (Fase 2 — auto-update; tabla creada en POC, sin datos)

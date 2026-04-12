@@ -577,10 +577,10 @@ CREATE INDEX idx_boot_device_time ON boot_metrics (device_id, recorded_at DESC);
 
 ---
 
-### 3.7 Tabla: `disk_usage`
+### 3.7 Tabla: `disk_metrics`
 
 ```sql
-CREATE TABLE disk_usage (
+CREATE TABLE disk_metrics (
     id                  BIGSERIAL       PRIMARY KEY,
     device_id           UUID            NOT NULL REFERENCES devices(id),
     recorded_at         TIMESTAMP       NOT NULL,
@@ -595,8 +595,8 @@ CREATE TABLE disk_usage (
     used_percent        NUMERIC(5, 2)   NOT NULL CHECK (used_percent BETWEEN 0 AND 100)
 );
 
-CREATE INDEX idx_disk_device_time ON disk_usage (device_id, recorded_at DESC);
-CREATE INDEX idx_disk_device_drive ON disk_usage (device_id, drive_letter, recorded_at DESC);
+CREATE INDEX idx_disk_device_time ON disk_metrics (device_id, recorded_at DESC);
+CREATE INDEX idx_disk_device_drive ON disk_metrics (device_id, drive_letter, recorded_at DESC);
 ```
 
 **Restricciones:**
@@ -612,7 +612,7 @@ CREATE INDEX idx_disk_device_drive ON disk_usage (device_id, drive_letter, recor
 | `used_capacity_gb` | Mayor o igual a 0. Tres decimales. `used_capacity_gb = total_capacity_gb - free_capacity_gb` siempre. |
 | `used_percent` | Entre 0.00 y 100.00. Dos decimales en BD aunque el plugin reporta 1 decimal. |
 
-**Nota sobre múltiples registros por envío:** A diferencia de las otras tablas de métricas que insertan un registro por dispositivo y envío, `disk_usage` inserta **un registro por unidad detectada**. Un equipo con 3 discos locales generará 3 filas en cada envío. El índice `idx_disk_device_drive` optimiza las queries que filtran por dispositivo y letra de unidad específica.
+**Nota sobre múltiples registros por envío:** A diferencia de las otras tablas de métricas que insertan un registro por dispositivo y envío, `disk_metrics` inserta **un registro por unidad detectada**. Un equipo con 3 discos locales generará 3 filas en cada envío. El índice `idx_disk_device_drive` optimiza las queries que filtran por dispositivo y letra de unidad específica.
 
 ---
 
@@ -1008,7 +1008,7 @@ Los siguientes campos son nuevos respecto al documento técnico original y han s
 | Cambio | Sección | Motivo |
 |---|---|---|
 | Plugin `disk_usage` añadido al contrato del sistema | 1.5 | Nuevo plugin para monitorizar ocupación de disco en equipos Windows |
-| Tabla `disk_usage` añadida al modelo de datos | 3.7 | Almacenamiento de histórico de ocupación de disco por unidad |
+| Tabla `disk_metrics` añadida al modelo de datos | 3.7 | Almacenamiento de histórico de ocupación de disco por unidad |
 | Endpoint `/api/devices/{device_id}/history` actualizado para incluir `disk_usage` | 4.7 | Soporte para consulta de histórico de disco |
 | Ejemplos de payload actualizados con `disk_usage` | 2.4, 2.6 | Reflejar el nuevo plugin en la documentación |
-| Numeración de tablas ajustada: `agent_versions` pasa de §3.7 a §3.8 | 3 | Inserción de `disk_usage` desplaza el resto |
+| Numeración de tablas ajustada: `agent_versions` pasa de §3.7 a §3.8 | 3 | Inserción de `disk_metrics` desplaza el resto |
