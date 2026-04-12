@@ -149,6 +149,72 @@ class BootTimeMetrics(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Métricas de disco — un dict por unidad lógica
+# ---------------------------------------------------------------------------
+
+_VALID_DISK_SOURCES = {"cim"}
+
+
+class DiskUsageItem(BaseModel):
+    disk_source: str
+    drive_letter: str = Field(..., min_length=1, max_length=10)
+    volume_name: str | None = Field(default=None, max_length=255)
+    filesystem: str | None = Field(default=None, max_length=20)
+    total_capacity_gb: float
+    free_capacity_gb: float
+    used_capacity_gb: float
+    used_percent: float
+
+    @field_validator("disk_source")
+    @classmethod
+    def validate_source(cls, v: str) -> str:
+        if v not in _VALID_DISK_SOURCES:
+            raise ValueError(f"disk_source debe ser 'cim', recibido: {v!r}")
+        return v
+
+    @field_validator("drive_letter")
+    @classmethod
+    def validate_drive_letter(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("drive_letter no puede estar vacío")
+        return v
+
+    @field_validator("total_capacity_gb")
+    @classmethod
+    def validate_total(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"total_capacity_gb debe ser > 0, recibido: {v}")
+        return v
+
+    @field_validator("free_capacity_gb")
+    @classmethod
+    def validate_free(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"free_capacity_gb debe ser >= 0, recibido: {v}")
+        return v
+
+    @field_validator("used_capacity_gb")
+    @classmethod
+    def validate_used(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"used_capacity_gb debe ser >= 0, recibido: {v}")
+        return v
+
+    @field_validator("used_percent")
+    @classmethod
+    def validate_used_percent(cls, v: float) -> float:
+        if not (0.0 <= v <= 100.0):
+            raise ValueError(f"used_percent debe estar en [0.0, 100.0], recibido: {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_capacities(self) -> "DiskUsageItem":
+        if self.free_capacity_gb > self.total_capacity_gb:
+            raise ValueError("free_capacity_gb no puede ser mayor que total_capacity_gb")
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Bloque metrics del payload
 # ---------------------------------------------------------------------------
 
@@ -161,16 +227,18 @@ class MetricsBlock(BaseModel):
     battery: BatteryMetrics | None = None
     software_usage: list[SoftwareUsageItem] | None = None
     boot_time: BootTimeMetrics | None = None
+    disk_usage: list[DiskUsageItem] | None = None
 
     @model_validator(mode="after")
     def validate_not_all_none(self) -> "MetricsBlock":
-        if all(v is None for v in (self.battery, self.software_usage, self.boot_time)):
+        if all(v is None for v in (self.battery, self.software_usage, self.boot_time, self.disk_usage)):
             raise ValueError("metrics no puede estar vacío: al menos un plugin debe estar presente")
-        # software_usage=[] (lista vacía) no cuenta como dato presente
+        # software_usage=[] y disk_usage=[] no cuentan como dato presente
         if (
             self.battery is None
             and self.boot_time is None
             and (self.software_usage is None or len(self.software_usage) == 0)
+            and (self.disk_usage is None or len(self.disk_usage) == 0)
         ):
             raise ValueError("metrics no puede estar vacío: al menos un plugin debe aportar datos")
         return self

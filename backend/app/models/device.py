@@ -41,3 +41,6 @@ class Device(Base):
     boot_metrics: Mapped[list["BootMetric"]] = relationship(  # noqa: F821
         back_populates="device", lazy="noload"
     )
+    disk_usages: Mapped[list["DiskUsage"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )

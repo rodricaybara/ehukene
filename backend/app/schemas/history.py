@@ -32,10 +32,22 @@ class SoftwareHistoryItem(BaseModel):
     executions_90d: int
 
 
+class DiskUsageHistoryItem(BaseModel):
+    recorded_at: datetime
+    drive_letter: str
+    volume_name: str | None
+    filesystem: str | None
+    total_capacity_gb: float
+    free_capacity_gb: float
+    used_capacity_gb: float
+    used_percent: float
+
+
 class HistoryData(BaseModel):
     battery: list[BatteryHistoryItem] = []
     boot_time: list[BootHistoryItem] = []
     software_usage: list[SoftwareHistoryItem] = []
+    disk_usage: list[DiskUsageHistoryItem] = []
 
 
 class HistoryResponse(BaseModel):

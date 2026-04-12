@@ -101,6 +101,29 @@ CREATE INDEX IF NOT EXISTS idx_boot_device_time
     ON boot_metrics (device_id, recorded_at DESC);
 
 -- =============================================================================
+-- disk_usage
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS disk_usage (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    data_source         VARCHAR(10)     NOT NULL,   -- 'cim'
+    drive_letter        VARCHAR(10)     NOT NULL,
+    volume_name         VARCHAR(255)    NULL,
+    filesystem          VARCHAR(20)     NULL,
+    total_capacity_gb   NUMERIC(10, 3)  NOT NULL CHECK (total_capacity_gb > 0),
+    free_capacity_gb    NUMERIC(10, 3)  NOT NULL CHECK (free_capacity_gb >= 0),
+    used_capacity_gb    NUMERIC(10, 3)  NOT NULL CHECK (used_capacity_gb >= 0),
+    used_percent        NUMERIC(5, 2)   NOT NULL CHECK (used_percent BETWEEN 0 AND 100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_disk_usage_device_time
+    ON disk_usage (device_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_disk_usage_device_drive_time
+    ON disk_usage (device_id, drive_letter, recorded_at DESC);
+
+-- =============================================================================
 -- agent_versions  (Fase 2 — auto-update; tabla creada en POC, sin datos)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS agent_versions (

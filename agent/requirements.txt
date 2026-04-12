@@ -3,5 +3,8 @@
 # Los plugins usan subprocess + PowerShell para consultas WMI,
 # sin dependencia del paquete wmi (incompatible con Python 3.13+).
 
+# Testing
+pytest>=8.0.0
+
 # Empaquetado
 pyinstaller>=6.10.0

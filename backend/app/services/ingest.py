@@ -22,6 +22,7 @@ from app.config import settings
 from app.models.battery_metrics import BatteryMetric
 from app.models.boot_metrics import BootMetric
 from app.models.device import Device
+from app.models.disk_usage import DiskUsage
 from app.models.software_usage import SoftwareUsage
 from app.models.telemetry_raw import TelemetryRaw
 from app.schemas.telemetry import TelemetryPayload
@@ -182,6 +183,37 @@ async def insert_boot_metrics(
     db.add(record)
 
 
+async def insert_disk_usage(
+    device: Device,
+    payload: TelemetryPayload,
+    db: AsyncSession,
+) -> None:
+    """
+    Inserta una fila por cada unidad lógica en disk_usage.
+    Si el plugin devolvió lista vacía no se inserta nada.
+    """
+    items = payload.metrics.disk_usage
+    if not items:
+        return
+
+    agent_ts = payload.parsed_timestamp()
+
+    for item in items:
+        record = DiskUsage(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            data_source=item.disk_source,
+            drive_letter=item.drive_letter,
+            volume_name=item.volume_name,
+            filesystem=item.filesystem,
+            total_capacity_gb=item.total_capacity_gb,
+            free_capacity_gb=item.free_capacity_gb,
+            used_capacity_gb=item.used_capacity_gb,
+            used_percent=item.used_percent,
+        )
+        db.add(record)
+
+
 # ---------------------------------------------------------------------------
 # Función principal de ingesta
 # ---------------------------------------------------------------------------
@@ -201,3 +233,4 @@ async def ingest_telemetry(
     await insert_battery(device, payload, db)
     await insert_software_usage(device, payload, db)
     await insert_boot_metrics(device, payload, db)
+    await insert_disk_usage(device, payload, db)

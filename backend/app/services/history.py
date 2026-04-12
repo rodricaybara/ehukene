@@ -11,16 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.battery_metrics import BatteryMetric
 from app.models.boot_metrics import BootMetric
+from app.models.disk_usage import DiskUsage
 from app.models.software_usage import SoftwareUsage
 from app.schemas.device import (
     LastBatteryMetrics,
     LastBootMetrics,
+    LastDiskUsageItem,
     LastMetrics,
     LastSoftwareUsageItem,
 )
 from app.schemas.history import (
     BatteryHistoryItem,
     BootHistoryItem,
+    DiskUsageHistoryItem,
     HistoryData,
     SoftwareHistoryItem,
 )
@@ -104,10 +107,44 @@ async def get_last_metrics(device_id: uuid.UUID, db: AsyncSession) -> LastMetric
             recorded_at=boot_row.recorded_at,
         )
 
+    last_disk_ts = (
+        await db.execute(
+            select(DiskUsage.recorded_at)
+            .where(DiskUsage.device_id == device_id)
+            .order_by(DiskUsage.recorded_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    last_disk_usage: list[LastDiskUsageItem] = []
+    if last_disk_ts:
+        disk_rows = (
+            await db.execute(
+                select(DiskUsage).where(
+                    DiskUsage.device_id == device_id,
+                    DiskUsage.recorded_at == last_disk_ts,
+                )
+            )
+        ).scalars().all()
+        last_disk_usage = [
+            LastDiskUsageItem(
+                drive_letter=r.drive_letter,
+                volume_name=r.volume_name,
+                filesystem=r.filesystem,
+                total_capacity_gb=float(r.total_capacity_gb),
+                free_capacity_gb=float(r.free_capacity_gb),
+                used_capacity_gb=float(r.used_capacity_gb),
+                used_percent=float(r.used_percent),
+                recorded_at=r.recorded_at,
+            )
+            for r in disk_rows
+        ]
+
     return LastMetrics(
         battery=last_battery,
         software_usage=last_software,
         boot_time=last_boot,
+        disk_usage=last_disk_usage,
     )
 
 
@@ -210,6 +247,41 @@ async def get_software_history(
     ]
 
 
+async def get_disk_usage_history(
+    device_id: uuid.UUID,
+    from_dt: datetime,
+    to_dt: datetime,
+    limit: int,
+    db: AsyncSession,
+) -> list[DiskUsageHistoryItem]:
+    rows = (
+        await db.execute(
+            select(DiskUsage)
+            .where(
+                DiskUsage.device_id == device_id,
+                DiskUsage.recorded_at >= from_dt,
+                DiskUsage.recorded_at <= to_dt,
+            )
+            .order_by(DiskUsage.recorded_at.desc(), DiskUsage.drive_letter.asc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    return [
+        DiskUsageHistoryItem(
+            recorded_at=r.recorded_at,
+            drive_letter=r.drive_letter,
+            volume_name=r.volume_name,
+            filesystem=r.filesystem,
+            total_capacity_gb=float(r.total_capacity_gb),
+            free_capacity_gb=float(r.free_capacity_gb),
+            used_capacity_gb=float(r.used_capacity_gb),
+            used_percent=float(r.used_percent),
+        )
+        for r in rows
+    ]
+
+
 async def get_history(
     device_id: uuid.UUID,
     metric: str | None,
@@ -222,12 +294,13 @@ async def get_history(
     Recupera el histórico de métricas de un dispositivo.
 
     Si metric es None se devuelven todas las métricas.
-    Si metric es uno de 'battery', 'boot_time', 'software_usage'
+    Si metric es uno de 'battery', 'boot_time', 'software_usage', 'disk_usage'
     se devuelve solo esa.
     """
     battery:  list[BatteryHistoryItem]  = []
     boot:     list[BootHistoryItem]     = []
     software: list[SoftwareHistoryItem] = []
+    disk:     list[DiskUsageHistoryItem] = []
 
     if metric in (None, "battery"):
         battery = await get_battery_history(device_id, from_dt, to_dt, limit, db)
@@ -235,5 +308,7 @@ async def get_history(
         boot = await get_boot_history(device_id, from_dt, to_dt, limit, db)
     if metric in (None, "software_usage"):
         software = await get_software_history(device_id, from_dt, to_dt, limit, db)
+    if metric in (None, "disk_usage"):
+        disk = await get_disk_usage_history(device_id, from_dt, to_dt, limit, db)
 
-    return HistoryData(battery=battery, boot_time=boot, software_usage=software)
+    return HistoryData(battery=battery, boot_time=boot, software_usage=software, disk_usage=disk)

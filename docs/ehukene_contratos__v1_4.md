@@ -1,9 +1,9 @@
 # EHUkene — Contratos del Sistema
 ## Documento de referencia de diseño
 
-**Versión:** 1.4  
+**Versión:** 1.5  
 **Estado:** Diseño  
-**Fecha:** 2026-03-31  
+**Fecha:** 2026-04-08  
 **Relacionado con:** Documento técnico v1.0 · Features auto-update y CLI v1.0
 
 > Este documento establece los contratos formales del sistema. Nada que no esté definido aquí debe implementarse. Cualquier desviación respecto a este documento es un bug de diseño, no de código.
@@ -181,6 +181,54 @@ Fallback         : WMI — Win32_OperatingSystem.LastBootUpTime (Get-WmiObject v
 
 ---
 
+#### Plugin: `disk_usage`
+
+```
+Nombre en config.json : "disk_usage"
+Fichero               : agent/plugins/disk_usage.py
+Privilegios mínimos   : Usuario estándar
+Plataforma            : Solo Windows
+```
+
+**Fuente de datos:**
+```
+Fuente única : CIM — Win32_LogicalDisk (DriveType=3) vía subprocess PowerShell
+
+1. Get-CimInstance → lista de unidades locales con sus métricas
+        ↓ si falla
+2. Devuelve None
+```
+
+El valor de retorno es `list[dict]`, con una entrada por unidad lógica local detectada:
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `disk_source` | `str` | No | Fuente usada: siempre `"cim"` |
+| `drive_letter` | `str` | No | Letra de la unidad (ej. `"C:"`, `"D:"`) |
+| `volume_name` | `str` | Sí | Nombre del volumen. `None` si no tiene etiqueta |
+| `filesystem` | `str` | Sí | Sistema de archivos (ej. `"NTFS"`, `"FAT32"`). `None` si no disponible |
+| `total_capacity_gb` | `float` | No | Capacidad total en GB con 3 decimales (ej. `238.472`) |
+| `free_capacity_gb` | `float` | No | Capacidad libre en GB con 3 decimales (ej. `45.123`) |
+| `used_capacity_gb` | `float` | No | Capacidad usada en GB con 3 decimales (ej. `193.349`) |
+| `used_percent` | `float` | No | Porcentaje de uso, 1 decimal. `(used / total) * 100` (ej. `81.1`) |
+
+Devuelve `[]` si el equipo no tiene unidades locales detectables (DriveType=3).
+Devuelve `None` si la consulta CIM falla.
+
+**Invariantes:**
+- `disk_source` es siempre `"cim"`. Nunca `None`.
+- `drive_letter` nunca es `None` ni cadena vacía.
+- `total_capacity_gb > 0.0` siempre.
+- `free_capacity_gb >= 0.0` siempre.
+- `used_capacity_gb >= 0.0` siempre.
+- `free_capacity_gb <= total_capacity_gb` siempre.
+- `used_percent` en rango `[0.0, 100.0]`.
+- Los valores de capacidad se convierten de bytes a GB dividiendo por `1024^3` con 3 decimales de precisión.
+- La lista está ordenada alfabéticamente por `drive_letter`.
+- `[]` es un retorno válido (sin unidades locales). `None` indica fallo interno del plugin.
+
+---
+
 ### 1.6 Lo que un plugin NO puede hacer
 
 - Leer o escribir `config.json`.
@@ -240,16 +288,44 @@ Cada clave en `metrics` es el nombre del plugin (coincide con el nombre en `conf
       "battery_health_percent": 36.1,
       "battery_status": null
     },
-    "software_usage": {
-      "acrobat_installed": true,
-      "acrobat_version": "24.0.0",
-      "acrobat_last_execution": "2026-03-20T10:30:00",
-      "acrobat_executions_last_30d": 3
-    },
+    "software_usage": [
+      {
+        "name": "adobe_acrobat_pro",
+        "installed": true,
+        "version": "24.0.0",
+        "last_execution": "2026-03-20T10:30:00",
+        "executions_last_30d": 3,
+        "executions_last_60d": 5,
+        "executions_last_90d": 8
+      }
+    ],
     "boot_time": {
+      "boot_source": "event_log",
       "last_boot_time": "2026-03-28T07:58:00",
       "boot_duration_seconds": 42
-    }
+    },
+    "disk_usage": [
+      {
+        "disk_source": "cim",
+        "drive_letter": "C:",
+        "volume_name": "Sistema",
+        "filesystem": "NTFS",
+        "total_capacity_gb": 238.472,
+        "free_capacity_gb": 45.123,
+        "used_capacity_gb": 193.349,
+        "used_percent": 81.1
+      },
+      {
+        "disk_source": "cim",
+        "drive_letter": "D:",
+        "volume_name": "Datos",
+        "filesystem": "NTFS",
+        "total_capacity_gb": 465.762,
+        "free_capacity_gb": 120.458,
+        "used_capacity_gb": 345.304,
+        "used_percent": 74.1
+      }
+    ]
   }
 }
 ``` de construcción del payload
@@ -264,7 +340,7 @@ Cada clave en `metrics` es el nombre del plugin (coincide con el nombre en `conf
 ```json
 {
   "device_id": "HOSTNAME-001",
-  "timestamp": "2026-03-28T08:15:00Z",
+  "timestamp": "2026-04-08T08:15:00Z",
   "agent_version": "1.1.0",
   "username": "usuario@dominio.local",
   "metrics": {
@@ -279,16 +355,44 @@ Cada clave en `metrics` es el nombre del plugin (coincide con el nombre en `conf
       "battery_health_percent": 36.1,
       "battery_status": null
     },
-    "software_usage": {
-      "acrobat_installed": true,
-      "acrobat_version": "24.0.0",
-      "acrobat_last_execution": "2026-03-20T10:30:00",
-      "acrobat_executions_last_30d": 3
-    },
+    "software_usage": [
+      {
+        "name": "adobe_acrobat_pro",
+        "installed": true,
+        "version": "24.0.0",
+        "last_execution": "2026-03-20T10:30:00",
+        "executions_last_30d": 3,
+        "executions_last_60d": 5,
+        "executions_last_90d": 8
+      }
+    ],
     "boot_time": {
-      "last_boot_time": "2026-03-28T07:58:00",
+      "boot_source": "event_log",
+      "last_boot_time": "2026-04-08T07:58:00",
       "boot_duration_seconds": 42
-    }
+    },
+    "disk_usage": [
+      {
+        "disk_source": "cim",
+        "drive_letter": "C:",
+        "volume_name": "Sistema",
+        "filesystem": "NTFS",
+        "total_capacity_gb": 238.472,
+        "free_capacity_gb": 45.123,
+        "used_capacity_gb": 193.349,
+        "used_percent": 81.1
+      },
+      {
+        "disk_source": "cim",
+        "drive_letter": "D:",
+        "volume_name": "Datos",
+        "filesystem": "NTFS",
+        "total_capacity_gb": 465.762,
+        "free_capacity_gb": 120.458,
+        "used_capacity_gb": 345.304,
+        "used_percent": 74.1
+      }
+    ]
   }
 }
 ```
@@ -473,7 +577,46 @@ CREATE INDEX idx_boot_device_time ON boot_metrics (device_id, recorded_at DESC);
 
 ---
 
-### 3.7 Tabla: `agent_versions` *(Fase 2 — auto-update)*
+### 3.7 Tabla: `disk_usage`
+
+```sql
+CREATE TABLE disk_usage (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    data_source         VARCHAR(10)     NOT NULL,   -- 'cim'
+    drive_letter        VARCHAR(10)     NOT NULL,
+    volume_name         VARCHAR(100)    NULL,
+    filesystem          VARCHAR(20)     NULL,
+    total_capacity_gb   NUMERIC(10, 3)  NOT NULL CHECK (total_capacity_gb > 0),
+    free_capacity_gb    NUMERIC(10, 3)  NOT NULL CHECK (free_capacity_gb >= 0),
+    used_capacity_gb    NUMERIC(10, 3)  NOT NULL CHECK (used_capacity_gb >= 0),
+    used_percent        NUMERIC(5, 2)   NOT NULL CHECK (used_percent BETWEEN 0 AND 100)
+);
+
+CREATE INDEX idx_disk_device_time ON disk_usage (device_id, recorded_at DESC);
+CREATE INDEX idx_disk_device_drive ON disk_usage (device_id, drive_letter, recorded_at DESC);
+```
+
+**Restricciones:**
+
+| Campo | Restricción |
+|---|---|
+| `data_source` | Solo `'cim'`. Validado en aplicación antes de insertar. Valor proviene directamente del campo `disk_source` del payload del agente. |
+| `drive_letter` | Nunca `NULL` ni cadena vacía. Máx. 10 caracteres para cubrir formatos futuros. |
+| `volume_name` | `NULL` si el volumen no tiene etiqueta. Máx. 100 caracteres. |
+| `filesystem` | `NULL` si no disponible. Típicamente `'NTFS'`, `'FAT32'`, `'exFAT'`. Máx. 20 caracteres. |
+| `total_capacity_gb` | Estrictamente mayor que 0. Tres decimales. |
+| `free_capacity_gb` | Mayor o igual a 0. Tres decimales. |
+| `used_capacity_gb` | Mayor o igual a 0. Tres decimales. `used_capacity_gb = total_capacity_gb - free_capacity_gb` siempre. |
+| `used_percent` | Entre 0.00 y 100.00. Dos decimales en BD aunque el plugin reporta 1 decimal. |
+
+**Nota sobre múltiples registros por envío:** A diferencia de las otras tablas de métricas que insertan un registro por dispositivo y envío, `disk_usage` inserta **un registro por unidad detectada**. Un equipo con 3 discos locales generará 3 filas en cada envío. El índice `idx_disk_device_drive` optimiza las queries que filtran por dispositivo y letra de unidad específica.
+
+---
+
+### 3.8 Tabla: `agent_versions` *(Fase 2 — auto-update)*
 
 Manifiesto de versiones servido por el endpoint `GET /api/agent/version`.
 
@@ -704,7 +847,7 @@ Histórico de métricas de un dispositivo.
 
 | Parámetro | Tipo | Descripción | Defecto |
 |---|---|---|---|
-| `metric` | `string` | Filtrar por tipo: `battery`, `software_usage`, `boot_time` | Todos |
+| `metric` | `string` | Filtrar por tipo: `battery`, `software_usage`, `boot_time`, `disk_usage` | Todos |
 | `from` | `string` (ISO 8601) | Fecha inicio | Hace 30 días |
 | `to` | `string` (ISO 8601) | Fecha fin | Ahora |
 | `limit` | `int` | Máximo de resultados por métrica | `90` |
@@ -715,20 +858,36 @@ Histórico de métricas de un dispositivo.
 {
   "device_id": "uuid",
   "from": "2026-02-26T00:00:00Z",
-  "to": "2026-03-28T23:59:59Z",
+  "to": "2026-04-08T23:59:59Z",
   "history": {
     "battery": [
       {
-        "recorded_at": "2026-03-28T08:15:00Z",
+        "recorded_at": "2026-04-08T08:15:00Z",
         "health_percent": 73.0,
         "battery_status": 2
       }
     ],
     "boot_time": [
       {
-        "recorded_at": "2026-03-28T08:15:00Z",
-        "last_boot_time": "2026-03-28T07:58:00Z",
+        "recorded_at": "2026-04-08T08:15:00Z",
+        "last_boot_time": "2026-04-08T07:58:00Z",
         "boot_duration_seconds": 42
+      }
+    ],
+    "disk_usage": [
+      {
+        "recorded_at": "2026-04-08T08:15:00Z",
+        "drive_letter": "C:",
+        "total_capacity_gb": 238.472,
+        "free_capacity_gb": 45.123,
+        "used_percent": 81.1
+      },
+      {
+        "recorded_at": "2026-04-08T08:15:00Z",
+        "drive_letter": "D:",
+        "total_capacity_gb": 465.762,
+        "free_capacity_gb": 120.458,
+        "used_percent": 74.1
       }
     ]
   }
@@ -843,3 +1002,13 @@ Los siguientes campos son nuevos respecto al documento técnico original y han s
 | Campo `boot_source` añadido al contrato del plugin `boot_time` | 1.5 | Elimina la inferencia implícita `boot_duration_seconds=None → fuente=wmi` en el backend; simetría con `battery_source` |
 | Invariante `boot_duration_seconds=None cuando boot_source='wmi'` reformulado como dependencia explícita de `boot_source` | 1.5 | El campo que manda es `boot_source`; la duración es consecuencia, no el indicador |
 | Restricción `data_source` en tabla `boot_metrics` actualizada: el valor proviene de `boot_source` del payload, no se infiere | 3.6 | Refleja el flujo de datos real tras el cambio en el plugin y el schema Pydantic |
+
+## Apéndice E — Cambios respecto a v1.4 (v1.5)
+
+| Cambio | Sección | Motivo |
+|---|---|---|
+| Plugin `disk_usage` añadido al contrato del sistema | 1.5 | Nuevo plugin para monitorizar ocupación de disco en equipos Windows |
+| Tabla `disk_usage` añadida al modelo de datos | 3.7 | Almacenamiento de histórico de ocupación de disco por unidad |
+| Endpoint `/api/devices/{device_id}/history` actualizado para incluir `disk_usage` | 4.7 | Soporte para consulta de histórico de disco |
+| Ejemplos de payload actualizados con `disk_usage` | 2.4, 2.6 | Reflejar el nuevo plugin en la documentación |
+| Numeración de tablas ajustada: `agent_versions` pasa de §3.7 a §3.8 | 3 | Inserción de `disk_usage` desplaza el resto |
