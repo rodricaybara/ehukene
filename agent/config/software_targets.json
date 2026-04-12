@@ -1,0 +1,18 @@
+{
+  "version": "1.1.0",
+  "last_updated": "2026-04-09",
+  "description": "Lista de software a monitorizar - UPV/EHU",
+  "maintainer": "Vicegerencia TIC - UPV/EHU",
+  "targets": [
+    {
+      "name": "adobe_acrobat_reader",
+      "display_name": "Adobe Acrobat Reader",
+      "package_name": "*Adobe Acrobat Reader*",
+      "registry_keys": [
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\68AB67CA7DA74301B744CAF070E41400\\InstallProperties"
+      ],
+      "registry_version_value": "DisplayVersion",
+      "prefetch_pattern": "ACRORD32.EXE-*.pf"
+    }
+  ]
+}

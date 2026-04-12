@@ -1,0 +1,7 @@
+# Dependencias del agente EHUkene
+# El core usa únicamente librería estándar de Python.
+# Los plugins usan subprocess + PowerShell para consultas WMI,
+# sin dependencia del paquete wmi (incompatible con Python 3.13+).
+
+# Empaquetado
+pyinstaller>=6.10.0

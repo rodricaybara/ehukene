@@ -1,0 +1,17 @@
+{
+  "agent_version": "1.0.0",
+  "auto_update": false,
+  "enabled_plugins": [
+    "battery",
+    "software_usage",
+    "boot_time"
+  ],
+  "api_url": "https://10.227.81.132/api",
+  "api_key": "12573de0811eb1c7077a44633b243f933407f377f7b6c167360be1d913f59436",
+  "verify_ssl": false,
+  "retry_attempts": 3,
+  "retry_wait_seconds": 30,
+  "timeout_connect": 5,
+  "timeout_read": 10,
+  "data_dir": "C:\\ProgramData\\EHUkene"
+}

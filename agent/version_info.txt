@@ -1,0 +1,38 @@
+# UTF-8
+#
+# version_info.txt — Metadatos del ejecutable para Windows
+# Visible en: clic derecho sobre agent.exe → Propiedades → Detalles
+#
+# Formato requerido por PyInstaller/Windows PE.
+# Los campos FileVersion y ProductVersion deben ser tuplas de 4 enteros.
+
+VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=(1, 0, 0, 0),
+        prodvers=(1, 0, 0, 0),
+        mask=0x3f,
+        flags=0x0,
+        OS=0x40004,       # Windows NT
+        fileType=0x1,     # VFT_APP
+        subtype=0x0,
+        date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo([
+            StringTable(
+                '040a04b0',   # Español (España) — UTF-16
+                [
+                    StringStruct('CompanyName',      'UPV/EHU — Sistemas'),
+                    StringStruct('FileDescription',  'EHUkene — Agente de telemetría'),
+                    StringStruct('FileVersion',      '1.0.0.0'),
+                    StringStruct('InternalName',     'agent'),
+                    StringStruct('LegalCopyright',   'UPV/EHU'),
+                    StringStruct('OriginalFilename', 'agent.exe'),
+                    StringStruct('ProductName',      'EHUkene Agent'),
+                    StringStruct('ProductVersion',   '1.0.0'),
+                ]
+            )
+        ]),
+        VarFileInfo([VarStruct('Translation', [0x040a, 1200])])
+    ]
+)
