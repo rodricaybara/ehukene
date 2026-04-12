@@ -3,7 +3,7 @@
 
 **Versión:** 1.5  
 **Estado:** Diseño  
-**Fecha:** 2026-04-08  
+**Fecha:** 2026-04-12 
 **Relacionado con:** Documento técnico v1.0 · Features auto-update y CLI v1.0
 
 > Este documento establece los contratos formales del sistema. Nada que no esté definido aquí debe implementarse. Cualquier desviación respecto a este documento es un bug de diseño, no de código.
