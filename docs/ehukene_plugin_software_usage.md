@@ -1,9 +1,9 @@
 # EHUkene — Plugin `software_usage`
 ## Documentación técnica
 
-**Versión:** 1.3
+**Versión:** 1.3.1
 **Estado:** Implementado
-**Fecha:** 2026-04-09
+**Fecha:** 2026-04-13
 **Fichero:** `agent/plugins/software_usage.py`
 **Relacionado con:** Contratos v1.2 · Estándar de plugins v1.0
 
@@ -39,7 +39,7 @@ El caso de uso principal en la POC es la optimización de licencias de Adobe Acr
 | Plataforma | Solo Windows |
 | Privilegios | Administrador local |
 | Dependencias externas | Ninguna (solo biblioteca estándar de Python) |
-| Módulos Python | `glob`, `json`, `logging`, `os`, `re`, `subprocess`, `winreg`, `datetime`, `pathlib` |
+| Módulos Python | `glob`, `json`, `logging`, `os`, `re`, `subprocess`, `sys`, `winreg`, `datetime`, `pathlib` |
 
 > Los privilegios de administrador son necesarios para `Get-Package` y para acceder a `C:\Windows\Prefetch\`. Sin ellos, el plugin cae al fallback de registro para la instalación y devuelve conteos de uso a `0`.
 
@@ -334,7 +334,8 @@ software_usage.py
 ├── log = logging.getLogger(__name__)
 ├── Constantes
 │     _PREFETCH_DIR            ruta al directorio de Prefetch
-│     _CONFIG_PATH             ruta a software_targets.json
+│     _BASE_DIR                ruta base del agente (compatible con PyInstaller)
+│     _CONFIG_PATH             ruta a software_targets.json, derivada de _BASE_DIR
 │     _WINDOW_30/60/90_DAYS   ventanas temporales de conteo
 │     _GET_PACKAGE_TIMEOUT_S  timeout para el subproceso PowerShell
 │     _REGISTRY_HIVES         hives del registro a consultar

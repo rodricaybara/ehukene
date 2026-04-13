@@ -39,6 +39,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import winreg
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -49,7 +50,18 @@ log = logging.getLogger(__name__)
 # Constantes
 # ---------------------------------------------------------------------------
 _PREFETCH_DIR          = r"C:\Windows\Prefetch"
-_CONFIG_PATH           = Path(__file__).parent.parent / "config" / "software_targets.json"
+
+# Resolución de la ruta base compatible con ejecución directa y PyInstaller.
+# En modo frozen, __file__ apunta al directorio temporal de extracción
+# (_MEIxxxxxx\), no al directorio real del ejecutable. sys.executable siempre
+# apunta al .exe real independientemente del modo de empaquetado.
+# Mismo patrón que core/config.py (ver CODIGO.md).
+if getattr(sys, "frozen", False):
+    _BASE_DIR = Path(sys.executable).parent          # C:\Program Files\EHUkene\
+else:
+    _BASE_DIR = Path(__file__).parent.parent         # agent/
+
+_CONFIG_PATH           = _BASE_DIR / "config" / "software_targets.json"
 _WINDOW_30_DAYS        = 30
 _WINDOW_60_DAYS        = 60
 _WINDOW_90_DAYS        = 90
