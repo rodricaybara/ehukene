@@ -149,6 +149,348 @@ class BootTimeMetrics(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Health monitor
+# ---------------------------------------------------------------------------
+
+_HEALTH_COMMON_STATUS = {
+    "ok",
+    "warning",
+    "critical",
+    "error",
+}
+_HEALTH_DOMAIN_STATUS = {"ok", "error", "not_in_domain"}
+_HEALTH_BOOT_STATUS = {"optimal", "ok", "degraded", "critical", "unknown", "error"}
+_HEALTH_SERVICE_STATUS = {"ok", "warning", "critical", "not_available", "error"}
+_HEALTH_BOOT_SOURCES = {"event_log", "wmi"}
+
+
+class HealthExecution(BaseModel):
+    duration_ms: int = Field(..., ge=0)
+    metrics_attempted: int = Field(..., ge=0)
+    metrics_successful: int = Field(..., ge=0)
+
+    @model_validator(mode="after")
+    def validate_successful(self) -> "HealthExecution":
+        if self.metrics_successful > self.metrics_attempted:
+            raise ValueError("metrics_successful no puede ser mayor que metrics_attempted")
+        return self
+
+
+class HealthCpuMetric(BaseModel):
+    load_percentage: int | None = None
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("load_percentage")
+    @classmethod
+    def validate_load(cls, v: int | None) -> int | None:
+        if v is not None and not (0 <= v <= 100):
+            raise ValueError(f"load_percentage debe estar en [0, 100], recibido: {v}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_COMMON_STATUS:
+            raise ValueError(f"status inválido para cpu: {v!r}")
+        return v
+
+
+class HealthMemoryMetric(BaseModel):
+    total_kb: int | None = None
+    free_kb: int | None = None
+    usage_pct: float | None = None
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("total_kb")
+    @classmethod
+    def validate_total(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"total_kb debe ser > 0, recibido: {v}")
+        return v
+
+    @field_validator("free_kb")
+    @classmethod
+    def validate_free(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError(f"free_kb debe ser >= 0, recibido: {v}")
+        return v
+
+    @field_validator("usage_pct")
+    @classmethod
+    def validate_usage(cls, v: float | None) -> float | None:
+        if v is not None and not (0.0 <= v <= 100.0):
+            raise ValueError(f"usage_pct debe estar en [0.0, 100.0], recibido: {v}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_COMMON_STATUS:
+            raise ValueError(f"status inválido para memory: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_relation(self) -> "HealthMemoryMetric":
+        if (
+            self.total_kb is not None
+            and self.free_kb is not None
+            and self.free_kb > self.total_kb
+        ):
+            raise ValueError("free_kb no puede ser mayor que total_kb")
+        return self
+
+
+class HealthDiskMetric(BaseModel):
+    drive: str | None = Field(default=None, max_length=10)
+    total_gb: float | None = None
+    free_gb: float | None = None
+    free_pct: float | None = None
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("drive")
+    @classmethod
+    def validate_drive(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("drive no puede ser una cadena vacía")
+        return v
+
+    @field_validator("total_gb")
+    @classmethod
+    def validate_total(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"total_gb debe ser > 0, recibido: {v}")
+        return v
+
+    @field_validator("free_gb")
+    @classmethod
+    def validate_free(cls, v: float | None) -> float | None:
+        if v is not None and v < 0:
+            raise ValueError(f"free_gb debe ser >= 0, recibido: {v}")
+        return v
+
+    @field_validator("free_pct")
+    @classmethod
+    def validate_free_pct(cls, v: float | None) -> float | None:
+        if v is not None and not (0.0 <= v <= 100.0):
+            raise ValueError(f"free_pct debe estar en [0.0, 100.0], recibido: {v}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_COMMON_STATUS:
+            raise ValueError(f"status inválido para disk: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_relation(self) -> "HealthDiskMetric":
+        if (
+            self.total_gb is not None
+            and self.free_gb is not None
+            and self.free_gb > self.total_gb
+        ):
+            raise ValueError("free_gb no puede ser mayor que total_gb")
+        return self
+
+
+class HealthEventSourceItem(BaseModel):
+    provider: str = Field(..., min_length=1, max_length=255)
+    count: int = Field(..., ge=0)
+
+
+class HealthSampleEventItem(BaseModel):
+    event_id: int
+    provider: str = Field(..., min_length=1, max_length=255)
+    level: str = Field(..., min_length=1, max_length=20)
+    time_created: str
+
+    @field_validator("time_created")
+    @classmethod
+    def validate_time_created(cls, v: str) -> str:
+        if not _ISO8601_UTC.match(v):
+            raise ValueError(
+                f"time_created debe ser ISO 8601 UTC 'YYYY-MM-DDTHH:MM:SSZ', recibido: {v!r}"
+            )
+        return v
+
+
+class HealthEventsMetric(BaseModel):
+    critical_count: int = Field(..., ge=0)
+    error_count: int = Field(..., ge=0)
+    filtered_count: int = Field(..., ge=0)
+    top_sources: list[HealthEventSourceItem] = Field(default_factory=list)
+    sample_events: list[HealthSampleEventItem] = Field(default_factory=list)
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_COMMON_STATUS:
+            raise ValueError(f"status inválido para events: {v!r}")
+        return v
+
+
+class HealthDomainMetric(BaseModel):
+    secure_channel: bool
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_DOMAIN_STATUS:
+            raise ValueError(f"status inválido para domain: {v!r}")
+        return v
+
+
+class HealthUptimeMetric(BaseModel):
+    last_boot: str | None = None
+    days: float | None = None
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("last_boot")
+    @classmethod
+    def validate_last_boot(cls, v: str | None) -> str | None:
+        if v is not None and not _ISO8601_UTC.match(v):
+            raise ValueError(
+                f"last_boot debe ser ISO 8601 UTC 'YYYY-MM-DDTHH:MM:SSZ', recibido: {v!r}"
+            )
+        return v
+
+    @field_validator("days")
+    @classmethod
+    def validate_days(cls, v: float | None) -> float | None:
+        if v is not None and v < 0:
+            raise ValueError(f"days debe ser >= 0, recibido: {v}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_COMMON_STATUS:
+            raise ValueError(f"status inválido para uptime: {v!r}")
+        return v
+
+
+class HealthBootTimeMetric(BaseModel):
+    last_boot_time: str | None = None
+    boot_duration_seconds: int | None = None
+    source: str | None = None
+    status: str
+    error_msg: str | None = None
+
+    @field_validator("last_boot_time")
+    @classmethod
+    def validate_last_boot_time(cls, v: str | None) -> str | None:
+        if v is not None and not _ISO8601_LOCAL.match(v):
+            raise ValueError(
+                f"last_boot_time debe ser ISO 8601 'YYYY-MM-DDTHH:MM:SS', recibido: {v!r}"
+            )
+        return v
+
+    @field_validator("boot_duration_seconds")
+    @classmethod
+    def validate_duration(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"boot_duration_seconds debe ser > 0, recibido: {v}")
+        return v
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, v: str | None) -> str | None:
+        if v is not None and v not in _HEALTH_BOOT_SOURCES:
+            raise ValueError(f"source inválido para boot_time: {v!r}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_BOOT_STATUS:
+            raise ValueError(f"status inválido para boot_time: {v!r}")
+        return v
+
+
+class HealthServiceItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, max_length=255)
+    state: str = Field(..., min_length=1, max_length=50)
+    startup_type: str | None = Field(default=None, max_length=50)
+    tier: int = Field(..., ge=0, le=3)
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in _HEALTH_SERVICE_STATUS:
+            raise ValueError(f"status inválido para services: {v!r}")
+        return v
+
+
+class HealthMonitorMetrics(BaseModel):
+    plugin_version: str
+    host: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=255)
+    timestamp: str
+    execution: HealthExecution
+    metrics: dict[str, Any]
+
+    @field_validator("plugin_version")
+    @classmethod
+    def validate_plugin_version(cls, v: str) -> str:
+        if not _SEMVER.match(v):
+            raise ValueError(
+                f"plugin_version debe ser semver 'MAJOR.MINOR.PATCH', recibido: {v!r}"
+            )
+        return v
+
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        if not _ISO8601_UTC.match(v):
+            raise ValueError(
+                f"timestamp de health_monitor debe ser ISO 8601 UTC 'YYYY-MM-DDTHH:MM:SSZ', recibido: {v!r}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_metrics_block(self) -> "HealthMonitorMetrics":
+        expected_keys = {
+            "cpu",
+            "memory",
+            "disk",
+            "events",
+            "domain",
+            "uptime",
+            "boot_time",
+            "services",
+        }
+        if set(self.metrics.keys()) != expected_keys:
+            raise ValueError(
+                "health_monitor.metrics debe contener exactamente: "
+                + ", ".join(sorted(expected_keys))
+            )
+
+        self.metrics["cpu"] = HealthCpuMetric.model_validate(self.metrics["cpu"])
+        self.metrics["memory"] = HealthMemoryMetric.model_validate(self.metrics["memory"])
+        self.metrics["disk"] = HealthDiskMetric.model_validate(self.metrics["disk"])
+        self.metrics["events"] = HealthEventsMetric.model_validate(self.metrics["events"])
+        self.metrics["domain"] = HealthDomainMetric.model_validate(self.metrics["domain"])
+        self.metrics["uptime"] = HealthUptimeMetric.model_validate(self.metrics["uptime"])
+        self.metrics["boot_time"] = HealthBootTimeMetric.model_validate(self.metrics["boot_time"])
+
+        services = self.metrics["services"]
+        if not isinstance(services, list):
+            raise ValueError("health_monitor.metrics.services debe ser una lista")
+        self.metrics["services"] = [HealthServiceItem.model_validate(item) for item in services]
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Métricas de disco — un dict por unidad lógica
 # ---------------------------------------------------------------------------
 
@@ -228,15 +570,26 @@ class MetricsBlock(BaseModel):
     software_usage: list[SoftwareUsageItem] | None = None
     boot_time: BootTimeMetrics | None = None
     disk_usage: list[DiskUsageItem] | None = None
+    health_monitor: HealthMonitorMetrics | None = None
 
     @model_validator(mode="after")
     def validate_not_all_none(self) -> "MetricsBlock":
-        if all(v is None for v in (self.battery, self.software_usage, self.boot_time, self.disk_usage)):
+        if all(
+            v is None
+            for v in (
+                self.battery,
+                self.software_usage,
+                self.boot_time,
+                self.disk_usage,
+                self.health_monitor,
+            )
+        ):
             raise ValueError("metrics no puede estar vacío: al menos un plugin debe estar presente")
         # software_usage=[] y disk_usage=[] no cuentan como dato presente
         if (
             self.battery is None
             and self.boot_time is None
+            and self.health_monitor is None
             and (self.software_usage is None or len(self.software_usage) == 0)
             and (self.disk_usage is None or len(self.disk_usage) == 0)
         ):

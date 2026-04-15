@@ -18,7 +18,20 @@ from app.services.history import get_history
 
 router = APIRouter(prefix="/api/devices", tags=["history"])
 
-_VALID_METRICS = {"battery", "software_usage", "boot_time", "disk_usage"}
+_VALID_METRICS = {
+    "battery",
+    "software_usage",
+    "boot_time",
+    "disk_usage",
+    "health_cpu",
+    "health_memory",
+    "health_disk",
+    "health_events",
+    "health_domain",
+    "health_uptime",
+    "health_boot_time",
+    "health_services",
+}
 
 
 @router.get(
@@ -30,7 +43,11 @@ async def device_history(
     device_id: uuid.UUID,
     metric: str | None = Query(
         default=None,
-        description="Filtrar por tipo: battery, software_usage, boot_time, disk_usage. Sin valor = todas.",
+        description=(
+            "Filtrar por tipo: battery, software_usage, boot_time, disk_usage, "
+            "health_cpu, health_memory, health_disk, health_events, health_domain, "
+            "health_uptime, health_boot_time, health_services. Sin valor = todas."
+        ),
     ),
     from_: datetime | None = Query(
         default=None,

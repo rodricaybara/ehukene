@@ -82,11 +82,106 @@ class LastDiskUsageItem(BaseModel):
     recorded_at: datetime
 
 
+class LastHealthCpuMetrics(BaseModel):
+    load_percentage: float | None
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthMemoryMetrics(BaseModel):
+    total_kb: int | None
+    free_kb: int | None
+    usage_pct: float | None
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthDiskMetrics(BaseModel):
+    drive: str | None
+    total_gb: float | None
+    free_gb: float | None
+    free_pct: float | None
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthEventSourceItem(BaseModel):
+    provider: str
+    count: int
+
+
+class LastHealthSampleEventItem(BaseModel):
+    event_id: int
+    provider: str
+    level: str
+    time_created: datetime
+
+
+class LastHealthEventsMetrics(BaseModel):
+    critical_count: int
+    error_count: int
+    filtered_count: int
+    top_sources: list[LastHealthEventSourceItem] = Field(default_factory=list)
+    sample_events: list[LastHealthSampleEventItem] = Field(default_factory=list)
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthDomainMetrics(BaseModel):
+    secure_channel: bool
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthUptimeMetrics(BaseModel):
+    last_boot: datetime | None
+    days: float | None
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthBootTimeMetrics(BaseModel):
+    last_boot_time: datetime | None
+    boot_duration_seconds: int | None
+    source: str | None
+    status: str
+    error_msg: str | None
+    recorded_at: datetime
+
+
+class LastHealthServiceItem(BaseModel):
+    service_name: str
+    display_name: str | None
+    state: str
+    startup_type: str | None
+    tier: int
+    status: str
+    recorded_at: datetime
+
+
+class LastHealthMonitorMetrics(BaseModel):
+    cpu: LastHealthCpuMetrics | None = None
+    memory: LastHealthMemoryMetrics | None = None
+    disk: LastHealthDiskMetrics | None = None
+    events: LastHealthEventsMetrics | None = None
+    domain: LastHealthDomainMetrics | None = None
+    uptime: LastHealthUptimeMetrics | None = None
+    boot_time: LastHealthBootTimeMetrics | None = None
+    services: list[LastHealthServiceItem] = Field(default_factory=list)
+
+
 class LastMetrics(BaseModel):
     battery: LastBatteryMetrics | None = None
     software_usage: list[LastSoftwareUsageItem] = Field(default_factory=list)
     boot_time: LastBootMetrics | None = None
     disk_usage: list[LastDiskUsageItem] = Field(default_factory=list)
+    health_monitor: LastHealthMonitorMetrics | None = None
 
 
 class DeviceDetailResponse(BaseModel):

@@ -44,3 +44,27 @@ class Device(Base):
     disk_usages: Mapped[list["DiskUsage"]] = relationship(  # noqa: F821
         back_populates="device", lazy="noload"
     )
+    health_cpu_metrics: Mapped[list["HealthCpuMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_memory_metrics: Mapped[list["HealthMemoryMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_disk_metrics: Mapped[list["HealthDiskMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_event_metrics: Mapped[list["HealthEventMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_domain_metrics: Mapped[list["HealthDomainMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_uptime_metrics: Mapped[list["HealthUptimeMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_boot_time_metrics: Mapped[list["HealthBootTimeMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )
+    health_service_metrics: Mapped[list["HealthServiceMetric"]] = relationship(  # noqa: F821
+        back_populates="device", lazy="noload"
+    )

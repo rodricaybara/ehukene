@@ -23,6 +23,14 @@ from app.models.battery_metrics import BatteryMetric
 from app.models.boot_metrics import BootMetric
 from app.models.device import Device
 from app.models.disk_usage import DiskUsage
+from app.models.health_boot_time_metrics import HealthBootTimeMetric
+from app.models.health_cpu_metrics import HealthCpuMetric
+from app.models.health_disk_metrics import HealthDiskMetric
+from app.models.health_domain_metrics import HealthDomainMetric
+from app.models.health_event_metrics import HealthEventMetric
+from app.models.health_memory_metrics import HealthMemoryMetric
+from app.models.health_service_metrics import HealthServiceMetric
+from app.models.health_uptime_metrics import HealthUptimeMetric
 from app.models.software_usage import SoftwareUsage
 from app.models.telemetry_raw import TelemetryRaw
 from app.schemas.telemetry import TelemetryPayload
@@ -214,6 +222,136 @@ async def insert_disk_usage(
         db.add(record)
 
 
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_local_timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
+
+
+async def insert_health_monitor(
+    device: Device,
+    payload: TelemetryPayload,
+    db: AsyncSession,
+) -> None:
+    """Inserta las métricas tipadas del plugin health_monitor."""
+    hm = payload.metrics.health_monitor
+    if hm is None:
+        return
+
+    agent_ts = payload.parsed_timestamp()
+    metrics = hm.metrics
+
+    cpu = metrics["cpu"]
+    db.add(
+        HealthCpuMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            load_percentage=cpu.load_percentage,
+            status=cpu.status,
+            error_msg=cpu.error_msg,
+        )
+    )
+
+    memory = metrics["memory"]
+    db.add(
+        HealthMemoryMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            total_kb=memory.total_kb,
+            free_kb=memory.free_kb,
+            usage_pct=memory.usage_pct,
+            status=memory.status,
+            error_msg=memory.error_msg,
+        )
+    )
+
+    disk = metrics["disk"]
+    db.add(
+        HealthDiskMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            drive=disk.drive,
+            total_gb=disk.total_gb,
+            free_gb=disk.free_gb,
+            free_pct=disk.free_pct,
+            status=disk.status,
+            error_msg=disk.error_msg,
+        )
+    )
+
+    events = metrics["events"]
+    db.add(
+        HealthEventMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            critical_count=events.critical_count,
+            error_count=events.error_count,
+            filtered_count=events.filtered_count,
+            top_sources=[item.model_dump(mode="json") for item in events.top_sources],
+            sample_events=[item.model_dump(mode="json") for item in events.sample_events],
+            status=events.status,
+            error_msg=events.error_msg,
+        )
+    )
+
+    domain = metrics["domain"]
+    db.add(
+        HealthDomainMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            secure_channel=domain.secure_channel,
+            status=domain.status,
+            error_msg=domain.error_msg,
+        )
+    )
+
+    uptime = metrics["uptime"]
+    db.add(
+        HealthUptimeMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            last_boot=_parse_utc_timestamp(uptime.last_boot),
+            days=uptime.days,
+            status=uptime.status,
+            error_msg=uptime.error_msg,
+        )
+    )
+
+    boot = metrics["boot_time"]
+    db.add(
+        HealthBootTimeMetric(
+            device_id=device.id,
+            recorded_at=agent_ts,
+            last_boot_time=_parse_local_timestamp(boot.last_boot_time),
+            boot_duration_seconds=boot.boot_duration_seconds,
+            source=boot.source,
+            status=boot.status,
+            error_msg=boot.error_msg,
+        )
+    )
+
+    services = metrics["services"]
+    for item in services:
+        db.add(
+            HealthServiceMetric(
+                device_id=device.id,
+                recorded_at=agent_ts,
+                service_name=item.name,
+                display_name=item.display_name,
+                state=item.state,
+                startup_type=item.startup_type,
+                tier=item.tier,
+                status=item.status,
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Función principal de ingesta
 # ---------------------------------------------------------------------------
@@ -234,3 +372,4 @@ async def ingest_telemetry(
     await insert_software_usage(device, payload, db)
     await insert_boot_metrics(device, payload, db)
     await insert_disk_usage(device, payload, db)
+    await insert_health_monitor(device, payload, db)
