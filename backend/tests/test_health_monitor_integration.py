@@ -1,13 +1,14 @@
 import asyncio
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.device import Device
 from app.schemas.telemetry import TelemetryPayload
-from app.services.ingest import insert_health_monitor
+from app.services.ingest import insert_health_monitor, insert_raw
 
 
 def _build_payload() -> dict:
@@ -134,3 +135,21 @@ def test_insert_health_monitor_creates_typed_records():
     assert sum(1 for item in db.items if item.__class__.__name__ == "HealthServiceMetric") == 2
     assert any(item.__class__.__name__ == "HealthCpuMetric" for item in db.items)
     assert any(item.__class__.__name__ == "HealthBootTimeMetric" for item in db.items)
+
+
+def test_insert_raw_persists_agent_timestamp_from_payload():
+    payload = TelemetryPayload.model_validate(_build_payload())
+    device = Device(
+        id=uuid.uuid4(),
+        hostname="HOST-001",
+        api_key_hash="a" * 64,
+        active=True,
+    )
+    db = FakeSession()
+
+    asyncio.run(insert_raw(device, payload, payload.model_dump(mode="json"), db))
+
+    assert len(db.items) == 1
+    raw = db.items[0]
+    assert raw.__class__.__name__ == "TelemetryRaw"
+    assert raw.agent_timestamp == datetime(2026, 4, 15, 8, 0, 0)

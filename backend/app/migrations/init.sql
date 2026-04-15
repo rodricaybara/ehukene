@@ -31,12 +31,15 @@ CREATE INDEX        IF NOT EXISTS idx_devices_active   ON devices (active);
 CREATE TABLE IF NOT EXISTS telemetry_raw (
     id          BIGSERIAL       PRIMARY KEY,
     device_id   UUID            NOT NULL REFERENCES devices(id),
+    agent_timestamp TIMESTAMP   NOT NULL,
     received_at TIMESTAMP       NOT NULL DEFAULT NOW(),
     payload     JSONB           NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_telemetry_raw_device_time
     ON telemetry_raw (device_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_telemetry_raw_device_agent_time
+    ON telemetry_raw (device_id, agent_timestamp DESC);
 
 -- =============================================================================
 -- battery_metrics

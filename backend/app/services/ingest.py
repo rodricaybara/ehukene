@@ -61,8 +61,8 @@ async def is_duplicate(
         select(
             exists().where(
                 TelemetryRaw.device_id == device_id,
-                TelemetryRaw.received_at >= window_start,
-                TelemetryRaw.received_at <= window_end,
+                TelemetryRaw.agent_timestamp >= window_start,
+                TelemetryRaw.agent_timestamp <= window_end,
             )
         )
     )
@@ -97,6 +97,7 @@ async def insert_raw(
     """Inserta el payload completo en telemetry_raw como JSONB de auditoría."""
     raw = TelemetryRaw(
         device_id=device.id,
+        agent_timestamp=payload.parsed_timestamp(),
         payload=raw_dict,
     )
     db.add(raw)

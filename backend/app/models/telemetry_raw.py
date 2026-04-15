@@ -20,6 +20,8 @@ class TelemetryRaw(Base):
     device_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("devices.id"), nullable=False, index=True
     )
+    # Timestamp declarado por el agente en el payload; base de la deduplicación diaria
+    agent_timestamp: Mapped[datetime] = mapped_column(nullable=False, index=True)
     # Timestamp de recepción en el backend (no el timestamp del agente)
     received_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
