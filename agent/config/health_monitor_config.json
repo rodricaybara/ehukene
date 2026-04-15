@@ -1,0 +1,82 @@
+{
+  "version": "1.1",
+  "thresholds": {
+    "disk": {
+      "critical": 10,
+      "warning": 20
+    },
+    "memory": {
+      "critical": 90,
+      "warning": 80
+    },
+    "cpu": {
+      "critical": 90,
+      "warning": 75
+    },
+    "events": {
+      "critical_count_threshold": 10,
+      "error_count_threshold": 50
+    },
+    "uptime": {
+      "max_days_without_reboot": 90
+    },
+    "boot_time": {
+      "optimal": 60,
+      "normal": 120,
+      "degraded": 180
+    }
+  },
+  "services": {
+    "tier1": [
+      "SepMasterService",
+      "EventLog",
+      "RpcSs",
+      "LanmanWorkstation"
+    ],
+    "tier2": [
+      "WinDefend",
+      "wuauserv",
+      "BITS",
+      "Dnscache",
+      "W32Time",
+      "WinRM"
+    ],
+    "tier3": [
+      "Spooler"
+    ]
+  },
+  "event_filters": {
+    "ignored_providers": [
+      "Microsoft-Windows-GroupPolicy",
+      "NETLOGON",
+      "Microsoft-Windows-Time-Service",
+      "Microsoft-Windows-DistributedCOM",
+      "Microsoft-Windows-Kernel-General",
+      "USER32"
+    ],
+    "ignored_event_ids": [
+      1014,
+      10016,
+      10010,
+      1001,
+      10154,
+      15,
+      1,
+      37
+    ],
+    "ignored_combinations": [
+      {
+        "provider": "Microsoft-Windows-DNS-Client",
+        "event_id": 1014
+      },
+      {
+        "provider": "Microsoft-Windows-DistributedCOM",
+        "event_id": 10016
+      },
+      {
+        "provider": "Microsoft-Windows-DistributedCOM",
+        "event_id": 10010
+      }
+    ]
+  }
+}
