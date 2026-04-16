@@ -1,9 +1,9 @@
 # EHUkene — Contratos del Sistema
 ## Documento de referencia de diseño
 
-**Versión:** 1.5  
+**Versión:** 1.6  
 **Estado:** Diseño  
-**Fecha:** 2026-04-12 
+**Fecha:** 2026-04-16  
 **Relacionado con:** Documento técnico v1.0 · Features auto-update y CLI v1.0
 
 > Este documento establece los contratos formales del sistema. Nada que no esté definido aquí debe implementarse. Cualquier desviación respecto a este documento es un bug de diseño, no de código.
@@ -62,7 +62,7 @@ Los valores del diccionario deben ser serializables a JSON. Tipos permitidos:
 | `str` ISO 8601 para fechas | `"2026-03-28T08:15:00"` |
 | `list[dict]` | Lista homogénea de objetos planos. Los dicts de la lista solo contienen tipos primitivos ya permitidos. Permitido únicamente cuando el plugin monitoriza entidades múltiples. |
 
-No se permiten: objetos Python, `datetime` sin serializar, dicts anidados.
+No se permiten: objetos Python, `datetime` sin serializar, dicts anidados (excepto en `health_monitor` que tiene estructura compleja).
 
 ### 1.5 Contratos por plugin
 
@@ -229,6 +229,230 @@ Devuelve `None` si la consulta CIM falla.
 
 ---
 
+#### Plugin: `health_monitor`
+
+```
+Nombre en config.json : "health_monitor"
+Fichero               : agent/plugins/health_monitor.py
+Privilegios mínimos   : Usuario estándar (algunas métricas requieren admin local)
+Plataforma            : Solo Windows
+Configuración         : agent/config/health_monitor_config.json
+```
+
+**Descripción:** Plugin de monitorización integral que recopila 8 métricas de salud del sistema. Diseñado para funcionar en entornos corporativos restrictivos con principio de "fiabilidad sobre precisión".
+
+**Estructura de retorno:**
+
+El plugin devuelve un `dict` con la siguiente estructura (nunca `None` - si hay error, las métricas individuales reportan `status: "error"`):
+
+```python
+{
+    "plugin_version": str,              # Versión del plugin (semver)
+    "host": str,                        # Hostname del equipo
+    "domain": str,                      # Dominio (o "WORKGROUP")
+    "timestamp": str,                   # ISO 8601 UTC del momento de ejecución
+    "execution": {
+        "duration_ms": int,             # Duración total de ejecución
+        "metrics_attempted": int,       # Siempre 8
+        "metrics_successful": int       # Cuántas completaron sin error
+    },
+    "metrics": {
+        "cpu": {...},                   # Ver detalle abajo
+        "memory": {...},
+        "disk": {...},
+        "events": {...},
+        "domain": {...},
+        "uptime": {...},
+        "boot_time": {...},
+        "services": [...]               # Lista de servicios
+    }
+}
+```
+
+### Métrica: `cpu`
+
+**Fuente:** `Get-CimInstance Win32_Processor | Select-Object LoadPercentage`
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `load_percentage` | `int` | Sí | Porcentaje de carga CPU (0-100). `None` si hay error |
+| `status` | `str` | No | `"ok"`, `"warning"`, `"critical"`, `"error"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Invariantes:**
+- `load_percentage` en rango `[0, 100]` cuando presente.
+- `status` es uno de: `"ok"`, `"warning"`, `"critical"`, `"error"`.
+- Si `status == "error"`: `load_percentage` es `None` y `error_msg` contiene el detalle.
+- Si `status != "error"`: `load_percentage` no es `None` y `error_msg` es `None`.
+
+### Métrica: `memory`
+
+**Fuente:** `Get-CimInstance Win32_OperatingSystem`
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `total_kb` | `int` | Sí | Memoria total en KB. `None` si hay error |
+| `free_kb` | `int` | Sí | Memoria libre en KB. `None` si hay error |
+| `usage_pct` | `float` | Sí | Porcentaje de uso con 2 decimales. `None` si hay error |
+| `status` | `str` | No | `"ok"`, `"warning"`, `"critical"`, `"error"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Invariantes:**
+- `total_kb > 0` cuando presente.
+- `free_kb >= 0` cuando presente.
+- `free_kb <= total_kb` cuando ambos presentes.
+- `usage_pct` en rango `[0.0, 100.0]` cuando presente, con 2 decimales.
+- Cálculo: `usage_pct = ((total_kb - free_kb) / total_kb) * 100`.
+
+### Métrica: `disk`
+
+**Fuente:** `Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'"`
+
+**Nota:** Solo monitoriza el disco del sistema (típicamente C:).
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `drive` | `str` | Sí | Letra de unidad (ej. `"C:"`). `None` si hay error |
+| `total_gb` | `float` | Sí | Capacidad total en GB con 2 decimales. `None` si hay error |
+| `free_gb` | `float` | Sí | Espacio libre en GB con 2 decimales. `None` si hay error |
+| `free_pct` | `float` | Sí | Porcentaje libre con 2 decimales. `None` si hay error |
+| `status` | `str` | No | `"ok"`, `"warning"`, `"critical"`, `"error"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Invariantes:**
+- `total_gb > 0.0` cuando presente.
+- `free_gb >= 0.0` cuando presente.
+- `free_gb <= total_gb` cuando ambos presentes.
+- `free_pct` en rango `[0.0, 100.0]` cuando presente.
+- Cálculo: `free_pct = (free_gb / total_gb) * 100`.
+
+### Métrica: `events`
+
+**Fuente:** `Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2}`
+
+**Descripción:** Eventos críticos y de error del Event Log del sistema (últimas 24h). Triple filtrado: por provider+eventID, por combinaciones específicas, y eventos sin mensaje.
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `critical_count` | `int` | No | Número de eventos de nivel Critical |
+| `error_count` | `int` | No | Número de eventos de nivel Error |
+| `filtered_count` | `int` | No | Número de eventos descartados (ruido) |
+| `top_sources` | `list[dict]` | No | Top 5 providers por frecuencia (puede estar vacío) |
+| `sample_events` | `list[dict]` | No | Hasta 5 eventos de muestra (puede estar vacío) |
+| `status` | `str` | No | `"ok"`, `"warning"`, `"critical"`, `"error"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Estructura de `top_sources` (cada item):**
+- `provider` (str): Nombre del provider
+- `count` (int): Número de eventos
+
+**Estructura de `sample_events` (cada item):**
+- `event_id` (int): ID del evento
+- `provider` (str): Provider/Source
+- `level` (str): `"Critical"` o `"Error"`
+- `time_created` (str, ISO 8601 UTC): Timestamp del evento
+
+**Invariantes:**
+- `critical_count >= 0`, `error_count >= 0`, `filtered_count >= 0`.
+- `top_sources` es una lista (puede estar vacía si no hay eventos).
+- `sample_events` es una lista (puede estar vacía si no hay eventos).
+- Máximo 5 items en `top_sources`.
+- Máximo 5 items en `sample_events`.
+
+### Métrica: `domain`
+
+**Fuente:** `Test-ComputerSecureChannel`
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `secure_channel` | `bool` | No | `true` si el canal seguro está activo |
+| `status` | `str` | No | `"ok"`, `"error"`, `"not_in_domain"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Invariantes:**
+- `status` es uno de: `"ok"`, `"error"`, `"not_in_domain"`.
+- Si `status == "ok"`: `secure_channel` es `true`.
+- Si `status == "not_in_domain"`: `secure_channel` es `false`.
+
+### Métrica: `uptime`
+
+**Fuente:** `Get-CimInstance Win32_OperatingSystem | Select-Object LastBootUpTime`
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `last_boot` | `str` (ISO 8601 UTC) | Sí | Timestamp del último arranque. `None` si hay error |
+| `days` | `float` | Sí | Días desde el arranque con 1 decimal. `None` si hay error |
+| `status` | `str` | No | `"ok"`, `"warning"`, `"critical"`, `"error"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Invariantes:**
+- `last_boot` es ISO 8601 UTC válido cuando presente: `"YYYY-MM-DDTHH:MM:SSZ"`.
+- `days >= 0.0` cuando presente, con 1 decimal.
+- Cálculo: `days = (datetime.utcnow() - last_boot).total_seconds() / 86400`.
+
+### Métrica: `boot_time`
+
+**Fuente:** Estrategia dual con fallback
+1. Event Log — Event ID 100 (Microsoft-Windows-Diagnostics-Performance/Operational)
+2. WMI — Win32_OperatingSystem.LastBootUpTime
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `last_boot_time` | `str` (ISO 8601 local) | Sí | Timestamp del arranque. `None` si hay error |
+| `boot_duration_seconds` | `int` | Sí | Duración del boot. `None` si WMI o error |
+| `source` | `str` | Sí | `"event_log"` o `"wmi"`. `None` si hay error |
+| `status` | `str` | No | `"optimal"`, `"ok"`, `"degraded"`, `"critical"`, `"unknown"`, `"error"` |
+| `error_msg` | `str` | Sí | Mensaje de error si `status == "error"` |
+
+**Invariantes:**
+- `last_boot_time` es ISO 8601 local válido cuando presente: `"YYYY-MM-DDTHH:MM:SS"` (sin Z).
+- `boot_duration_seconds > 0` cuando presente.
+- `source` es `"event_log"` o `"wmi"` cuando presente.
+- Si `source == "wmi"`: `boot_duration_seconds` es `None` y `status` es `"unknown"`.
+- Si `source == "event_log"`: `boot_duration_seconds` no es `None`.
+- `status` es uno de: `"optimal"`, `"ok"`, `"degraded"`, `"critical"`, `"unknown"`, `"error"`.
+
+### Métrica: `services`
+
+**Fuente:** `Get-Service` con filtrado por tiers configurables
+
+**Descripción:** Lista de servicios críticos organizados en 3 niveles (tiers). El valor de retorno es `list[dict]`.
+
+**Estructura de cada servicio:**
+
+| Clave | Tipo | Nullable | Descripción |
+|---|---|---|---|
+| `name` | `str` | No | Nombre interno del servicio |
+| `display_name` | `str` | Sí | Nombre visible. `None` si no disponible |
+| `state` | `str` | No | `"Running"`, `"Stopped"`, `"Paused"`, etc. |
+| `startup_type` | `str` | Sí | `"Automatic"`, `"Manual"`, `"Disabled"`. `None` si no disponible |
+| `tier` | `int` | No | Nivel de criticidad (1-3) |
+| `status` | `str` | No | `"ok"`, `"warning"`, `"critical"`, `"not_available"`, `"error"` |
+
+**Invariantes:**
+- `tier` en rango `[1, 3]`.
+- `status` es uno de: `"ok"`, `"warning"`, `"critical"`, `"not_available"`, `"error"`.
+- `state` no es `None` (valor mínimo: `"Unknown"`).
+- Regla especial: Si `state == "Stopped"` y `startup_type == "Disabled"`: `status = "ok"`.
+- La lista contiene todos los servicios configurados en los 3 tiers.
+
+**Configuración de tiers (por defecto):**
+- **Tier 1 (Crítico):** SepMasterService, EventLog, RpcSs, LanmanWorkstation
+- **Tier 2 (Importante):** WinDefend, wuauserv, Spooler, Dhcp
+- **Tier 3 (Monitoreo):** LanmanServer, W32Time, Dnscache, Netlogon
+
+### Invariantes Globales del Plugin
+
+- El plugin siempre devuelve un `dict` (nunca `None`).
+- El bloque `metrics` contiene exactamente 8 claves: `cpu`, `memory`, `disk`, `events`, `domain`, `uptime`, `boot_time`, `services`.
+- `execution.metrics_attempted` es siempre `8`.
+- `execution.metrics_successful` en rango `[0, 8]`.
+- `execution.duration_ms > 0`.
+- `plugin_version` sigue formato semver: `"MAJOR.MINOR.PATCH"`.
+- `timestamp` es ISO 8601 UTC válido: `"YYYY-MM-DDTHH:MM:SSZ"`.
+
+---
+
 ### 1.6 Lo que un plugin NO puede hacer
 
 - Leer o escribir `config.json`.
@@ -325,92 +549,104 @@ Cada clave en `metrics` es el nombre del plugin (coincide con el nombre en `conf
         "used_capacity_gb": 345.304,
         "used_percent": 74.1
       }
-    ]
+    ],
+    "health_monitor": {
+      "plugin_version": "1.1.0",
+      "host": "HOSTNAME-001",
+      "domain": "CORPNET",
+      "timestamp": "2026-04-16T14:30:15Z",
+      "execution": {
+        "duration_ms": 2847,
+        "metrics_attempted": 8,
+        "metrics_successful": 8
+      },
+      "metrics": {
+        "cpu": {
+          "load_percentage": 45,
+          "status": "ok",
+          "error_msg": null
+        },
+        "memory": {
+          "total_kb": 8388608,
+          "free_kb": 2097152,
+          "usage_pct": 75.00,
+          "status": "ok",
+          "error_msg": null
+        },
+        "disk": {
+          "drive": "C:",
+          "total_gb": 238.47,
+          "free_gb": 15.62,
+          "free_pct": 6.55,
+          "status": "critical",
+          "error_msg": null
+        },
+        "events": {
+          "critical_count": 0,
+          "error_count": 4,
+          "filtered_count": 25,
+          "top_sources": [
+            {"provider": "Microsoft-Windows-WindowsUpdateClient", "count": 2}
+          ],
+          "sample_events": [
+            {
+              "event_id": 20,
+              "provider": "Microsoft-Windows-WindowsUpdateClient",
+              "level": "Error",
+              "time_created": "2026-04-16T10:23:45Z"
+            }
+          ],
+          "status": "ok",
+          "error_msg": null
+        },
+        "domain": {
+          "secure_channel": true,
+          "status": "ok",
+          "error_msg": null
+        },
+        "uptime": {
+          "last_boot": "2026-04-02T08:15:30Z",
+          "days": 14.3,
+          "status": "ok",
+          "error_msg": null
+        },
+        "boot_time": {
+          "last_boot_time": "2026-04-02T09:15:30",
+          "boot_duration_seconds": 115,
+          "source": "event_log",
+          "status": "ok",
+          "error_msg": null
+        },
+        "services": [
+          {
+            "name": "EventLog",
+            "display_name": "Windows Event Log",
+            "state": "Running",
+            "startup_type": "Automatic",
+            "tier": 1,
+            "status": "ok"
+          },
+          {
+            "name": "WinDefend",
+            "display_name": "Windows Defender Antivirus Service",
+            "state": "Stopped",
+            "startup_type": "Manual",
+            "tier": 2,
+            "status": "ok"
+          }
+        ]
+      }
+    }
   }
 }
-``` de construcción del payload
+```
+
+### 2.5 Reglas de construcción del payload
 
 - El `timestamp` se captura en el momento en que el `sender` inicia el envío, no en el momento de la recogida de métricas.
 - Si `metrics` queda vacío tras ejecutar todos los plugins, el agente **no envía** y registra el evento en el log local.
 - El payload se serializa en UTF-8. Caracteres no ASCII en `username` o `device_id` se normalizan a ASCII o se sustituyen por `_`.
 - El tamaño máximo del payload es **1 MB**. Si se supera (improbable en la POC), el agente registra el error y no envía.
-
-### 2.6 Payload de ejemplo completo
-
-```json
-{
-  "device_id": "HOSTNAME-001",
-  "timestamp": "2026-04-08T08:15:00Z",
-  "agent_version": "1.1.0",
-  "username": "usuario@dominio.local",
-  "metrics": {
-    "battery": {
-      "battery_source": "powercfg",
-      "battery_name": "DELL V494",
-      "battery_manufacturer": "Samsung SDI",
-      "battery_serial": "6322",
-      "battery_chemistry": "LION",
-      "battery_design_capacity_wh": 60.002,
-      "battery_full_charge_capacity_wh": 21.683,
-      "battery_health_percent": 36.1,
-      "battery_status": null
-    },
-    "software_usage": [
-      {
-        "name": "adobe_acrobat_pro",
-        "installed": true,
-        "version": "24.0.0",
-        "last_execution": "2026-03-20T10:30:00",
-        "executions_last_30d": 3,
-        "executions_last_60d": 5,
-        "executions_last_90d": 8
-      }
-    ],
-    "boot_time": {
-      "boot_source": "event_log",
-      "last_boot_time": "2026-04-08T07:58:00",
-      "boot_duration_seconds": 42
-    },
-    "disk_usage": [
-      {
-        "disk_source": "cim",
-        "drive_letter": "C:",
-        "volume_name": "Sistema",
-        "filesystem": "NTFS",
-        "total_capacity_gb": 238.472,
-        "free_capacity_gb": 45.123,
-        "used_capacity_gb": 193.349,
-        "used_percent": 81.1
-      },
-      {
-        "disk_source": "cim",
-        "drive_letter": "D:",
-        "volume_name": "Datos",
-        "filesystem": "NTFS",
-        "total_capacity_gb": 465.762,
-        "free_capacity_gb": 120.458,
-        "used_capacity_gb": 345.304,
-        "used_percent": 74.1
-      }
-    ]
-  }
-}
-```
-
-> **Ejemplo con fallback a WMI** (agente sin privilegios para powercfg):
-> ```json
-> "battery": {
->   "battery_source": "wmi",
->   "battery_name": null,
->   "battery_manufacturer": null,
->   "battery_serial": null,
->   "battery_chemistry": null,
->   "battery_design_capacity_wh": 45.0,
->   "battery_full_charge_capacity_wh": 32.85,
->   "battery_health_percent": 73.0,
->   "battery_status": 2
-> }
-> ```
 
 ---
 
@@ -460,19 +696,22 @@ Almacén de auditoría. Guarda el payload completo de cada envío.
 
 ```sql
 CREATE TABLE telemetry_raw (
-    id          BIGSERIAL       PRIMARY KEY,
-    device_id   UUID            NOT NULL REFERENCES devices(id),
-    received_at TIMESTAMP       NOT NULL DEFAULT NOW(),
-    payload     JSONB           NOT NULL
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    agent_timestamp     TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    payload             JSONB           NOT NULL
 );
 
 CREATE INDEX idx_telemetry_raw_device_time ON telemetry_raw (device_id, received_at DESC);
+CREATE INDEX idx_telemetry_raw_device_agent_ts ON telemetry_raw (device_id, agent_timestamp DESC);
 ```
 
 **Restricciones:**
 
 | Campo | Restricción |
 |---|---|
+| `agent_timestamp` | Timestamp del agente (extraído del campo `timestamp` del payload). Usado para deduplicación diaria. |
 | `received_at` | Timestamp de recepción en el backend (no el del agente). |
 | `payload` | Debe ser un objeto JSON válido con al menos las claves `device_id`, `timestamp`, `metrics`. Validación a nivel de aplicación, no de BD. |
 
@@ -503,17 +742,6 @@ CREATE INDEX idx_battery_device_time ON battery_metrics (device_id, recorded_at 
 CREATE INDEX idx_battery_health ON battery_metrics (device_id, health_percent);
 ```
 
-**Restricciones:**
-
-| Campo | Restricción |
-|---|---|
-| `data_source` | Solo `'powercfg'` o `'wmi'`. Validado en aplicación antes de insertar. |
-| `battery_name`, `battery_manufacturer`, `battery_serial`, `battery_chemistry` | `NULL` cuando `data_source = 'wmi'`. Presentes cuando `data_source = 'powercfg'` (pueden ser `NULL` si el campo venía vacío en el HTML). |
-| `design_capacity_wh` | Estrictamente mayor que 0. Tres decimales. |
-| `full_charge_capacity_wh` | Mayor o igual a 0. Puede ser 0 en baterías muy degradadas. Tres decimales. |
-| `health_percent` | Entre 0.00 y 150.00. Dos decimales. |
-| `battery_status` | `NULL` cuando `data_source = 'powercfg'`. Sin restricción de rango en BD cuando presente (se valida en aplicación). |
-
 ---
 
 ### 3.5 Tabla: `software_usage`
@@ -537,17 +765,6 @@ CREATE INDEX idx_software_device_name_time ON software_usage (device_id, softwar
 CREATE INDEX idx_software_name_installed   ON software_usage (software_name, installed);
 ```
 
-**Restricciones:**
-
-| Campo | Restricción |
-|---|---|
-| `software_name` | Valor controlado desde el agente. En la POC: `"adobe_acrobat_pro"`. Máx. 100 caracteres. |
-| `version` | `NULL` si `installed` es `FALSE`. |
-| `last_execution` | `NULL` si no hay datos. Almacenado en UTC (el agente envía hora local; el backend convierte). |
-| `executions_30d` | `>= 0`. `0` si no instalado o sin datos. |
-| `executions_60d` | `>= 0`. `0` si no instalado o sin datos. |
-| `executions_90d` | `>= 0`. `0` si no instalado o sin datos. Invariante de orden validado en aplicación: `30d <= 60d <= 90d`.|
-
 ---
 
 ### 3.6 Tabla: `boot_metrics`
@@ -565,15 +782,6 @@ CREATE TABLE boot_metrics (
 
 CREATE INDEX idx_boot_device_time ON boot_metrics (device_id, recorded_at DESC);
 ```
-
-**Restricciones:**
-
-| Campo | Restricción |
-|---|---|
-| `data_source` | Solo `'event_log'` o `'wmi'`. Validado en aplicación antes de insertar. Valor proviene directamente del campo `boot_source` del payload del agente. |
-| `last_boot_time` | Almacenado en UTC. El backend convierte desde la hora local del agente. |
-| `boot_duration_seconds` | `NULL` si `data_source = 'wmi'` o si el dato no estaba disponible. Si presente, estrictamente mayor que 0.|
-
 
 ---
 
@@ -599,24 +807,157 @@ CREATE INDEX idx_disk_device_time ON disk_metrics (device_id, recorded_at DESC);
 CREATE INDEX idx_disk_device_drive ON disk_metrics (device_id, drive_letter, recorded_at DESC);
 ```
 
-**Restricciones:**
+---
 
-| Campo | Restricción |
-|---|---|
-| `data_source` | Solo `'cim'`. Validado en aplicación antes de insertar. Valor proviene directamente del campo `disk_source` del payload del agente. |
-| `drive_letter` | Nunca `NULL` ni cadena vacía. Máx. 10 caracteres para cubrir formatos futuros. |
-| `volume_name` | `NULL` si el volumen no tiene etiqueta. Máx. 100 caracteres. |
-| `filesystem` | `NULL` si no disponible. Típicamente `'NTFS'`, `'FAT32'`, `'exFAT'`. Máx. 20 caracteres. |
-| `total_capacity_gb` | Estrictamente mayor que 0. Tres decimales. |
-| `free_capacity_gb` | Mayor o igual a 0. Tres decimales. |
-| `used_capacity_gb` | Mayor o igual a 0. Tres decimales. `used_capacity_gb = total_capacity_gb - free_capacity_gb` siempre. |
-| `used_percent` | Entre 0.00 y 100.00. Dos decimales en BD aunque el plugin reporta 1 decimal. |
+### 3.8 Tablas: Health Monitor (8 tablas)
 
-**Nota sobre múltiples registros por envío:** A diferencia de las otras tablas de métricas que insertan un registro por dispositivo y envío, `disk_metrics` inserta **un registro por unidad detectada**. Un equipo con 3 discos locales generará 3 filas en cada envío. El índice `idx_disk_device_drive` optimiza las queries que filtran por dispositivo y letra de unidad específica.
+#### `health_cpu_metrics`
+
+```sql
+CREATE TABLE health_cpu_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    load_percentage     SMALLINT        NULL CHECK (load_percentage BETWEEN 0 AND 100),
+    status              VARCHAR(20)     NOT NULL,
+    error_msg           TEXT            NULL
+);
+
+CREATE INDEX idx_health_cpu_device_time ON health_cpu_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_memory_metrics`
+
+```sql
+CREATE TABLE health_memory_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    total_kb            BIGINT          NULL CHECK (total_kb > 0),
+    free_kb             BIGINT          NULL CHECK (free_kb >= 0),
+    usage_pct           NUMERIC(5, 2)   NULL CHECK (usage_pct BETWEEN 0 AND 100),
+    status              VARCHAR(20)     NOT NULL,
+    error_msg           TEXT            NULL
+);
+
+CREATE INDEX idx_health_memory_device_time ON health_memory_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_disk_metrics`
+
+```sql
+CREATE TABLE health_disk_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    drive               VARCHAR(10)     NULL,
+    total_gb            NUMERIC(10, 2)  NULL CHECK (total_gb > 0),
+    free_gb             NUMERIC(10, 2)  NULL CHECK (free_gb >= 0),
+    free_pct            NUMERIC(5, 2)   NULL CHECK (free_pct BETWEEN 0 AND 100),
+    status              VARCHAR(20)     NOT NULL,
+    error_msg           TEXT            NULL
+);
+
+CREATE INDEX idx_health_disk_device_time ON health_disk_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_event_metrics`
+
+```sql
+CREATE TABLE health_event_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    critical_count      INTEGER         NOT NULL DEFAULT 0 CHECK (critical_count >= 0),
+    error_count         INTEGER         NOT NULL DEFAULT 0 CHECK (error_count >= 0),
+    filtered_count      INTEGER         NOT NULL DEFAULT 0 CHECK (filtered_count >= 0),
+    top_sources         JSONB           NOT NULL DEFAULT '[]'::jsonb,
+    sample_events       JSONB           NOT NULL DEFAULT '[]'::jsonb,
+    status              VARCHAR(20)     NOT NULL,
+    error_msg           TEXT            NULL
+);
+
+CREATE INDEX idx_health_event_device_time ON health_event_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_domain_metrics`
+
+```sql
+CREATE TABLE health_domain_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    secure_channel      BOOLEAN         NOT NULL DEFAULT FALSE,
+    status              VARCHAR(20)     NOT NULL,
+    error_msg           TEXT            NULL
+);
+
+CREATE INDEX idx_health_domain_device_time ON health_domain_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_uptime_metrics`
+
+```sql
+CREATE TABLE health_uptime_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    last_boot           TIMESTAMP       NULL,
+    days                NUMERIC(5, 1)   NULL CHECK (days >= 0),
+    status              VARCHAR(20)     NOT NULL,
+    error_msg           TEXT            NULL
+);
+
+CREATE INDEX idx_health_uptime_device_time ON health_uptime_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_boot_time_metrics`
+
+```sql
+CREATE TABLE health_boot_time_metrics (
+    id                      BIGSERIAL       PRIMARY KEY,
+    device_id               UUID            NOT NULL REFERENCES devices(id),
+    recorded_at             TIMESTAMP       NOT NULL,
+    received_at             TIMESTAMP       NOT NULL DEFAULT NOW(),
+    last_boot_time          TIMESTAMP       NULL,
+    boot_duration_seconds   INTEGER         NULL CHECK (boot_duration_seconds > 0),
+    source                  VARCHAR(20)     NULL,
+    status                  VARCHAR(20)     NOT NULL,
+    error_msg               TEXT            NULL
+);
+
+CREATE INDEX idx_health_boot_time_device_time ON health_boot_time_metrics (device_id, recorded_at DESC);
+```
+
+#### `health_service_metrics`
+
+```sql
+CREATE TABLE health_service_metrics (
+    id                  BIGSERIAL       PRIMARY KEY,
+    device_id           UUID            NOT NULL REFERENCES devices(id),
+    recorded_at         TIMESTAMP       NOT NULL,
+    received_at         TIMESTAMP       NOT NULL DEFAULT NOW(),
+    service_name        VARCHAR(100)    NOT NULL,
+    display_name        VARCHAR(255)    NULL,
+    state               VARCHAR(50)     NOT NULL,
+    startup_type        VARCHAR(50)     NULL,
+    tier                SMALLINT        NOT NULL CHECK (tier BETWEEN 0 AND 3),
+    status              VARCHAR(20)     NOT NULL
+);
+
+CREATE INDEX idx_health_service_device_time ON health_service_metrics (device_id, recorded_at DESC);
+CREATE INDEX idx_health_service_device_name ON health_service_metrics (device_id, service_name, recorded_at DESC);
+```
 
 ---
 
-### 3.8 Tabla: `agent_versions` *(Fase 2 — auto-update)*
+### 3.9 Tabla: `agent_versions` *(Fase 2 — auto-update)*
 
 Manifiesto de versiones servido por el endpoint `GET /api/agent/version`.
 
@@ -635,14 +976,6 @@ CREATE TABLE agent_versions (
 CREATE UNIQUE INDEX idx_agent_versions_active ON agent_versions (artifact_type, artifact_name, active)
     WHERE active = TRUE;
 ```
-
-**Restricciones:**
-
-| Campo | Restricción |
-|---|---|
-| `artifact_type` | Solo valores `'core'` o `'plugin'`. Validado en aplicación. |
-| `checksum_sha256` | 64 caracteres hex (SHA-256). |
-| Solo una versión activa por artefacto | Garantizado por el índice parcial único. |
 
 ---
 
@@ -674,7 +1007,7 @@ Todos los errores siguen esta estructura:
 | `401` | `UNAUTHORIZED` | API Key ausente, inválida o revocada |
 | `403` | `FORBIDDEN` | La API Key no corresponde al `device_id` del payload |
 | `404` | `NOT_FOUND` | El recurso solicitado no existe |
-| `409` | `DUPLICATE_SUBMISSION` | Ya existe un registro para este `device_id` en el día actual (solo `POST /api/telemetry`) |
+| `409` | `DUPLICATE_SUBMISSION` | Ya existe un registro para este `device_id` en la ventana de deduplicación |
 | `413` | `PAYLOAD_TOO_LARGE` | El payload supera 1 MB |
 | `422` | `VALIDATION_ERROR` | El payload es JSON válido pero no cumple el esquema |
 | `429` | `RATE_LIMIT_EXCEEDED` | Se superó el límite de peticiones |
@@ -697,7 +1030,7 @@ Recepción de métricas del agente.
 3. El payload es JSON válido y contiene todos los campos requeridos → `400` si no.
 4. El payload cumple el esquema (tipos, rangos, formatos) → `422` si no.
 5. El tamaño del payload es ≤ 1 MB → `413` si no.
-6. No existe ya un registro para este `device_id` en el día de `timestamp` → `409` si existe (el agente debe respetar el control de duplicados, pero el backend es la fuente de verdad).
+6. No existe ya un registro para este `device_id` en la ventana de deduplicación (±12.5h centrada en `agent_timestamp`) → `409` si existe.
 
 **Response 200 OK:**
 
@@ -712,7 +1045,7 @@ Recepción de métricas del agente.
 **Efectos:**
 
 - Se actualiza `devices.last_seen` y `devices.agent_version`.
-- Se inserta en `telemetry_raw`.
+- Se inserta en `telemetry_raw` con `agent_timestamp` del payload.
 - Se insertan registros en las tablas tipadas correspondientes a los plugins presentes en `metrics`.
 
 ---
@@ -732,16 +1065,6 @@ Registro inicial de un dispositivo nuevo.
 }
 ```
 
-| Campo | Tipo | Requerido | Validación |
-|---|---|---|---|
-| `hostname` | `string` | Sí | Máx. 255 caracteres. Solo ASCII. |
-| `requested_by` | `string` | No | Máx. 255 caracteres. Solo informativo. |
-
-**Validaciones:**
-
-1. `hostname` no vacío y cumple formato → `422` si no.
-2. `hostname` no existe ya en `devices` → `409` si existe.
-
 **Response 201 Created:**
 
 ```json
@@ -753,15 +1076,11 @@ Registro inicial de un dispositivo nuevo.
 }
 ```
 
-> La `api_key` se devuelve únicamente en esta respuesta. El backend almacena solo su hash. Si se pierde, debe generarse una nueva.
-
 ---
 
 ### 4.5 Endpoint: `GET /api/devices`
 
 Listado de dispositivos registrados.
-
-**Autenticación:** Requerida (`X-API-Key`) — Solo keys de administración (distinto perfil de las keys de dispositivo, a definir en Fase 2). En POC: cualquier key válida.
 
 **Query parameters:**
 
@@ -797,43 +1116,7 @@ Listado de dispositivos registrados.
 
 Detalle de un dispositivo.
 
-**Autenticación:** Requerida.
-
-**Path parameter:** `device_id` — UUID del dispositivo.
-
-**Response 200 OK:**
-
-```json
-{
-  "device_id": "uuid",
-  "hostname": "HOSTNAME-001",
-  "first_seen": "2026-01-10T09:00:00Z",
-  "last_seen": "2026-03-28T08:15:00Z",
-  "active": true,
-  "agent_version": "1.1.0",
-  "last_metrics": {
-    "battery": {
-      "health_percent": 73.0,
-      "battery_status": 2,
-      "recorded_at": "2026-03-28T08:15:00Z"
-    },
-    "software_usage": {
-      "acrobat_installed": true,
-      "acrobat_version": "24.0.0",
-      "acrobat_last_execution": "2026-03-20T10:30:00Z",
-      "acrobat_executions_last_30d": 3,
-      "recorded_at": "2026-03-28T08:15:00Z"
-    },
-    "boot_time": {
-      "last_boot_time": "2026-03-28T07:58:00Z",
-      "boot_duration_seconds": 42,
-      "recorded_at": "2026-03-28T08:15:00Z"
-    }
-  }
-}
-```
-
-**Response 404:** Si el `device_id` no existe.
+**Response 200 OK:** Incluye `last_metrics` con las métricas más recientes de todos los plugins, incluyendo `health_monitor`.
 
 ---
 
@@ -841,58 +1124,28 @@ Detalle de un dispositivo.
 
 Histórico de métricas de un dispositivo.
 
-**Autenticación:** Requerida.
-
 **Query parameters:**
 
 | Parámetro | Tipo | Descripción | Defecto |
 |---|---|---|---|
-| `metric` | `string` | Filtrar por tipo: `battery`, `software_usage`, `boot_time`, `disk_usage` | Todos |
+| `metric` | `string` | Filtrar por tipo | Todos |
 | `from` | `string` (ISO 8601) | Fecha inicio | Hace 30 días |
 | `to` | `string` (ISO 8601) | Fecha fin | Ahora |
 | `limit` | `int` | Máximo de resultados por métrica | `90` |
 
-**Response 200 OK:**
-
-```json
-{
-  "device_id": "uuid",
-  "from": "2026-02-26T00:00:00Z",
-  "to": "2026-04-08T23:59:59Z",
-  "history": {
-    "battery": [
-      {
-        "recorded_at": "2026-04-08T08:15:00Z",
-        "health_percent": 73.0,
-        "battery_status": 2
-      }
-    ],
-    "boot_time": [
-      {
-        "recorded_at": "2026-04-08T08:15:00Z",
-        "last_boot_time": "2026-04-08T07:58:00Z",
-        "boot_duration_seconds": 42
-      }
-    ],
-    "disk_usage": [
-      {
-        "recorded_at": "2026-04-08T08:15:00Z",
-        "drive_letter": "C:",
-        "total_capacity_gb": 238.472,
-        "free_capacity_gb": 45.123,
-        "used_percent": 81.1
-      },
-      {
-        "recorded_at": "2026-04-08T08:15:00Z",
-        "drive_letter": "D:",
-        "total_capacity_gb": 465.762,
-        "free_capacity_gb": 120.458,
-        "used_percent": 74.1
-      }
-    ]
-  }
-}
-```
+**Valores válidos para `metric`:**
+- `battery`
+- `software_usage`
+- `boot_time`
+- `disk_usage`
+- `health_cpu`
+- `health_memory`
+- `health_disk`
+- `health_events`
+- `health_domain`
+- `health_uptime`
+- `health_boot_time`
+- `health_services`
 
 ---
 
@@ -900,50 +1153,7 @@ Histórico de métricas de un dispositivo.
 
 Manifiesto de versiones para auto-actualización.
 
-**Autenticación:** No requerida. Accesible vía HTTPS público.
-
-**Response 200 OK:**
-
-```json
-{
-  "core_version": "1.2.0",
-  "core_download_url": "https://ehukene.dominio.local/dist/agent-1.2.0.exe",
-  "core_checksum_sha256": "a3f1...",
-  "plugins": {
-    "battery": {
-      "version": "1.1.0",
-      "url": "https://ehukene.dominio.local/dist/plugins/battery-1.1.0.py",
-      "checksum_sha256": "c8d2..."
-    },
-    "software_usage": {
-      "version": "1.0.3",
-      "url": "https://ehukene.dominio.local/dist/plugins/software_usage-1.0.3.py",
-      "checksum_sha256": "e91a..."
-    },
-    "boot_time": {
-      "version": "1.0.0",
-      "url": "https://ehukene.dominio.local/dist/plugins/boot_time-1.0.0.py",
-      "checksum_sha256": "b47f..."
-    }
-  }
-}
-```
-
-**Restricciones:**
-
-- Las URLs de descarga deben ser HTTPS.
-- Los checksums son SHA-256 en hex (64 caracteres).
-- Solo se incluyen plugins con `active = TRUE` en `agent_versions`.
-
----
-
-### 4.9 Lo que la API NO hace
-
-- No devuelve la API Key en claro después del registro inicial.
-- No permite que un dispositivo consulte métricas de otro dispositivo con su propia API Key.
-- No expone detalles internos de errores en respuestas `500`.
-- No acepta payloads con `timestamp` futuro (más de 5 minutos sobre el tiempo del servidor → `422`).
-- No acepta payloads con `timestamp` anterior a 24 horas → `422` (el agente no debe enviar datos de días anteriores).
+**Autenticación:** No requerida.
 
 ---
 
@@ -954,61 +1164,65 @@ Manifiesto de versiones para auto-actualización.
 | `device_id` | En el agente: hostname del equipo. En la BD: UUID de la tabla `devices`. El backend resuelve el hostname al UUID en cada petición. |
 | `recorded_at` | Timestamp del momento de recogida de la métrica (lado agente), almacenado en UTC. |
 | `received_at` | Timestamp de recepción en el backend. Siempre posterior a `recorded_at`. |
+| `agent_timestamp` | Timestamp del agente (del campo `timestamp` del payload). Usado para deduplicación en lugar de `received_at`. |
 | Plugin | Módulo Python en `agent/plugins/` que implementa `collect() -> dict | None`. |
-| Manifiesto | Respuesta de `GET /api/agent/version` con las versiones actuales del core y los plugins. |
 
 ---
 
-## Apéndice B — Campos añadidos respecto al documento técnico v1.0
+## Apéndice B — Changelog
 
-Los siguientes campos son nuevos respecto al documento técnico original y han sido incorporados en este contrato por necesidad de diseño:
+### v1.6 (2026-04-16)
 
-| Campo | Tabla / Payload | Motivo |
-|---|---|---|
-| `agent_version` | Payload raíz | Necesario para detectar versiones desactualizadas en el backend |
-| `received_at` | Todas las tablas de métricas | Distinguir momento de recogida vs. recepción |
-| `agent_version` | Tabla `devices` | Seguimiento de versiones desplegadas en el parque |
-| `installed` | Tabla `software_usage` | Permite filtrar equipos con software instalado vs. usándolo |
-| `software_name` | Tabla `software_usage` | Prepara la tabla para más de un software sin cambio de esquema |
+**Añadido:**
+- Plugin `health_monitor` con 8 métricas integradas de salud del sistema
+- 8 tablas nuevas en base de datos: `health_cpu_metrics`, `health_memory_metrics`, `health_disk_metrics`, `health_event_metrics`, `health_domain_metrics`, `health_uptime_metrics`, `health_boot_time_metrics`, `health_service_metrics`
+- Campo `agent_timestamp` en tabla `telemetry_raw` para deduplicación correcta
+- Estados adicionales: `optimal`, `degraded`, `unknown` (boot_time), `not_in_domain` (domain), `not_available` (services)
+- Estructura compleja permitida en health_monitor (dict anidado con execution metadata)
+- Documentación extensa de health_monitor en sección 1.5
 
-## Apéndice C — Cambios respecto a v1.0 de este documento (v1.1)
+**Cambiado:**
+- Deduplicación usa `agent_timestamp` en lugar de `received_at` (corrige bug de latencia de red)
+- Índice adicional en `telemetry_raw`: `idx_telemetry_raw_device_agent_ts`
 
-| Cambio | Sección | Motivo |
-|---|---|---|
-| Fuente de datos del plugin `battery` cambiada a `powercfg /batteryreport` con fallback a WMI | 1.5 | Mayor fiabilidad; WMI no soportado por todos los fabricantes |
-| Privilegios del plugin `battery` elevados a administrador local | 1.5 | `powercfg /batteryreport` requiere permisos elevados |
-| Campos nuevos: `battery_source`, `battery_name`, `battery_manufacturer`, `battery_serial`, `battery_chemistry` | 1.5, 2.4, 2.6 | Datos de identificación de batería solo disponibles vía powercfg |
-| Unidad de capacidades cambiada de `mWh (int)` a `Wh (float, 3 decimales)` | 1.5, 2.4, 2.6 | powercfg reporta en Wh con decimales; se unifica la unidad para ambas fuentes |
-| Renombrado `battery_design_capacity` → `battery_design_capacity_wh` | 1.5, 2.x | Unidad explícita en el nombre de campo |
-| Renombrado `battery_full_charge_capacity` → `battery_full_charge_capacity_wh` | 1.5, 2.x | Unidad explícita en el nombre de campo |
-| Tabla `battery_metrics` rediseñada: columnas nuevas, tipos actualizados | 3.4 | Refleja los nuevos campos y la unidad Wh |
-| `battery_status` pasa a `NULLABLE` en BD | 3.4 | Es `null` cuando la fuente es powercfg |
-| `CYCLE COUNT` descartado del contrato | — | Dato no fiable: la mayoría de fabricantes no lo exponen (`-`) |
-| `list[dict]` añadido como tipo permitido| 1.4 | `software_usage` monitoriza entidades múltiples; estructura plana no es viable |
-| Contrato de `software_usage` reescrito: retorno cambia de dict a `list[dict]` con una entrada por target | 1.5 | Plugin configurable para múltiples programas |
-|Campos `acrobat_*` eliminados; sustituidos por campos genéricos `name`, `installed`, `version`, `last_execution`, `executions_last_*` | 1.5 | Generalización del contrato |
-| Privilegios de `software_usage` elevados a administrador local | 1.5 | Prefetch requiere permisos elevados|
-| `executions_last_30d` → tres campos: `executions_last_30d`, `executions_last_60d`, `executions_last_90d` | 1.5, 2, 3.5 | Mayor granularidad temporal para análisis de uso|
-|Tabla `software_usage`: añadidas columnas `executions_60d` y `executions_90d` | 3.5 | Refleja los tres periodos del contrato|
-| Fichero de configuración `agent/config/software_targets.json` introducido | 1.5 | Lista de programas a monitorizar configurable sin redespliegue del ejecutable|
-| Privilegios de `boot_time` elevados a administrador local | 1.5 | `Get-WinEvent` sobre el canal Diagnostics-Performance requiere permisos elevados |
-| Fuente primaria de `boot_time` definida: Event ID 100 con fallback WMI | 1.5 |El contrato v1.2 no especificaba las fuentes; la implementación las hace explícitas |
-| Invariantes de `boot_time` ampliados: mención del Event Log y `boot_duration_seconds`=`None` en fallback WMI | 1.5 | Refleja el comportamiento real de las dos fuentes |
-| Columna `data_source` añadida a `boot_metrics` | 3.6 | Trazabilidad de la fuente de cada registro, en línea con `battery_metrics`|
-## Apéndice D — Cambios respecto a v1.3 (v1.4)
+---
 
-| Cambio | Sección | Motivo |
-|---|---|---|
-| Campo `boot_source` añadido al contrato del plugin `boot_time` | 1.5 | Elimina la inferencia implícita `boot_duration_seconds=None → fuente=wmi` en el backend; simetría con `battery_source` |
-| Invariante `boot_duration_seconds=None cuando boot_source='wmi'` reformulado como dependencia explícita de `boot_source` | 1.5 | El campo que manda es `boot_source`; la duración es consecuencia, no el indicador |
-| Restricción `data_source` en tabla `boot_metrics` actualizada: el valor proviene de `boot_source` del payload, no se infiere | 3.6 | Refleja el flujo de datos real tras el cambio en el plugin y el schema Pydantic |
+### v1.5 (2026-04-08)
 
-## Apéndice E — Cambios respecto a v1.4 (v1.5)
+**Añadido:**
+- Plugin `disk_usage` para monitorización de múltiples unidades
+- Tabla `disk_metrics` en base de datos
 
-| Cambio | Sección | Motivo |
-|---|---|---|
-| Plugin `disk_usage` añadido al contrato del sistema | 1.5 | Nuevo plugin para monitorizar ocupación de disco en equipos Windows |
-| Tabla `disk_metrics` añadida al modelo de datos | 3.7 | Almacenamiento de histórico de ocupación de disco por unidad |
-| Endpoint `/api/devices/{device_id}/history` actualizado para incluir `disk_usage` | 4.7 | Soporte para consulta de histórico de disco |
-| Ejemplos de payload actualizados con `disk_usage` | 2.4, 2.6 | Reflejar el nuevo plugin en la documentación |
-| Numeración de tablas ajustada: `agent_versions` pasa de §3.7 a §3.8 | 3 | Inserción de `disk_metrics` desplaza el resto |
+---
+
+### v1.4 (2026-04-08)
+
+**Añadido:**
+- Campo `boot_source` explícito en plugin `boot_time`
+- Columna `data_source` en tabla `boot_metrics`
+
+**Cambiado:**
+- Inferencia de fuente eliminada (antes se infería de `boot_duration_seconds=None`)
+
+---
+
+### v1.3 (2026-03-29)
+
+**Añadido:**
+- Plugin `software_usage` con soporte para múltiples targets
+- Plugin `boot_time` con estrategia de fallback Event Log → WMI
+- Fichero de configuración `software_targets.json`
+
+**Cambiado:**
+- `software_usage` cambia de dict a `list[dict]`
+- Campos de ejecución extendidos: `executions_last_30d`, `executions_last_60d`, `executions_last_90d`
+
+---
+
+### Versiones anteriores
+
+Ver documento de contratos v1.0-v1.2 para changelog completo.
+
+---
+
+**Fin del documento de contratos v1.6**
